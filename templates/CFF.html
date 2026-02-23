@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Vision HMI</title>
+
+    <link rel="stylesheet" href="/static/hmi.css">
+</head>
+
+<body>
+
+    <!-- CAMERA -->
+    <div class="camera">
+        <img src="/video_feed">
+        <div id="modeBanner" class="mode-overlay maintenance">
+            MAINTENANCE MODE
+        </div>
+    </div>
+
+    <!-- HMI PANEL -->
+    <div class="panel">
+
+        <div id="status" class="status nok">
+            NO RESULT
+        </div>
+
+        <div class="info-box">
+            <h2>Detections</h2>
+            <div id="detections" class="detections">None</div>
+        </div>
+
+        <div class="info-box">
+            <h2>Processing Time</h2>
+            <div id="time">0 ms</div>
+        </div>
+
+        <div class="info-box">
+            <h2>Production Counters</h2>
+            <div class="detections">
+                OK: <span id="okCount">0</span><br>
+                NOK: <span id="nokCount">0</span><br>
+                TOTAL: <span id="totalCount">0</span>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h2>Confidence Threshold</h2>
+            <div class="threshold-row">
+                <input type="number" id="thresholdInput" min="0" max="1" step="0.05">
+                <button id="applyThreshold">Apply</button>
+            </div>
+        </div>
+
+        <div class="button-row">
+            <button id="resetBtn" class="btn reset">Reset Counters</button>
+            <button id="startProductionBtn" class="btn production">Start Production</button>
+            <button id="startMaintenanceBtn" class="btn maintenance">Maintenance</button>
+        </div>
+
+        <div class="footer">
+            Press <b>Q</b> to trigger inspection
+        </div>
+    </div>
+
+    <script src="/static/hmi.js"></script>
+</body>
+</html>
