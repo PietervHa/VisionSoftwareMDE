@@ -1,0 +1,143 @@
+body {
+    margin: 0;
+    background: #111;
+    color: #eee;
+    font-family: Arial, Helvetica, sans-serif;
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    height: 100vh;
+}
+
+/* Camera */
+.camera {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: black;
+}
+
+.camera img {
+    max-width: 100%;
+    max-height: 100%;
+}
+
+/* Mode overlay */
+.mode-overlay {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    padding: 8px 14px;
+    font-size: 16px;
+    font-weight: bold;
+    border-radius: 6px;
+    pointer-events: none;
+}
+
+.mode-overlay.maintenance {
+    background: rgba(255, 204, 0, 0.85);
+    color: #222;
+}
+
+.mode-overlay.production {
+    background: rgba(59, 91, 138, 0.9);
+    color: #fff;
+}
+
+/* Panel */
+.panel {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.status {
+    font-size: 48px;
+    font-weight: bold;
+    padding: 20px;
+    text-align: center;
+    border-radius: 10px;
+}
+
+.ok { background: #1e7f34; }
+.nok { background: #9b1c1c; }
+
+.info-box {
+    background: #1c1c1c;
+    border-radius: 10px;
+    padding: 15px;
+}
+
+.info-box h2 {
+    margin-top: 0;
+    font-size: 20px;
+    color: #aaa;
+}
+
+.detections {
+    font-size: 18px;
+}
+
+.threshold-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.threshold-row input {
+    font-size: 18px;
+    width: 80px;
+}
+
+.threshold-row button {
+    padding: 8px 14px;
+    font-size: 16px;
+    background: #444;
+    color: #eee;
+    border: none;
+    border-radius: 6px;
+}
+
+.button-row {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.btn {
+    padding: 10px 20px;
+    font-size: 18px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+}
+
+.btn.reset {
+    background: #555;
+    color: #eee;
+}
+
+/* production button style */
+.btn.production {
+    background: #3b5b8a;
+    color: #fff;
+}
+
+/* Maintenance button style */
+.btn.maintenance {
+    background: #f0c841; /* light yellow */
+    color: #222;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.footer {
+    margin-top: auto;
+    font-size: 14px;
+    color: #777;
+    text-align: center;
+}

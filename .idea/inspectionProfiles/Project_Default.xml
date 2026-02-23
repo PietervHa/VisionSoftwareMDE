@@ -1,0 +1,34 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="Flask-SocketIO" />
+          <option value="python-socketio" />
+          <option value="websockets" />
+          <option value="websocket-client" />
+          <option value="requests" />
+          <option value="aiosqlite" />
+          <option value="RPi.GPIO" />
+          <option value="gpiozero" />
+          <option value="smbus2" />
+          <option value="Adafruit-Blinka" />
+          <option value="adafruit-circuitpython-dht" />
+          <option value="adafruit-circuitpython-bme280" />
+          <option value="adafruit-circuitpython-ssd1306" />
+          <option value="Pillow" />
+          <option value="numpy" />
+          <option value="grove" />
+          <option value="adafruit-circuitpython-busdevice" />
+          <option value="adafruit-circuitpython-requests" />
+          <option value="adafruit-circuitpython-ads1x15" />
+          <option value="board" />
+          <option value="adafruit_sht31d" />
+          <option value="adafruit_si1145" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
