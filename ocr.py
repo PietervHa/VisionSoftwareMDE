@@ -5,6 +5,8 @@ import re
 from state import latest_result, lock
 import config
 
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
 
 class OCR:
     def __init__(self):
