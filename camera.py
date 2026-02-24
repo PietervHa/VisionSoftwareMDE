@@ -3,7 +3,7 @@ import threading
 import time
 
 class Camera:
-    def __init__(self, index=1):  # <- change index
+    def __init__(self, index=0):  # <- change index
         self.cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
