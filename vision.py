@@ -7,7 +7,7 @@ model = YOLO("yolov8n.pt")  # nano = fast, CPU friendly
 
 # Hardcode the vision mode: "ocr" or "object_detection"
 #VISION_MODE = "object_detection"  # Change to "ocr" to use OCR mode
-VISION_MODE = "object_detection"
+VISION_MODE = "ocr"
 
 ocr_instance = OCR()
 
@@ -17,10 +17,11 @@ def run_vision(frame):
     based on VISION_MODE configuration.
     """
     if VISION_MODE == "ocr":
-        detections = ocr_instance.run(frame)
+        detections, elapsed_ms = ocr_instance.run(frame)
         return {
             "detections": detections,
-            "mode": "ocr"
+            "mode": "ocr",
+            "processing_time_ms": elapsed_ms
         }
     elif VISION_MODE == "object_detection":
         return run_object_detection(frame)
