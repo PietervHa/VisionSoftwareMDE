@@ -20,6 +20,8 @@ class Camera:
         while self.running:
             ret, frame = self.cap.read()
             if ret:
+                # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
+                frame = cv2.flip(frame, -1)
                 with self.lock:
                     self.latest_frame = frame
             time.sleep(0.005)

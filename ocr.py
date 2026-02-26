@@ -1,10 +1,12 @@
-# ocr.py
 import pytesseract
 import cv2
 import re
 from state import latest_result, lock
 import config
+import easyocr
 
+reader = easyocr.Reader(['nl','en']) # this needs to run only once to load the model into memory
+#reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
