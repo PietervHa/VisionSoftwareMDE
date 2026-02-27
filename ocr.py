@@ -6,7 +6,7 @@ import time
 import easyocr
 
 #reader = easyocr.Reader(['nl','en']) # this needs to run only once to load the model into memory
-reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
+#reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
@@ -47,6 +47,7 @@ class OCR:
 
         return frame[y1:y2, x1:x2]
 
+    """
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
@@ -113,9 +114,9 @@ class OCR:
 
         # Return detections and processing time
         return detections, round(elapsed_ms, 1)
-    
 
 
+    """
     LET OP CHEFKE !!!!
     Return hetzelfde opbouwen als in objectdetection,
     nu is het anders en word het pas in de vision.py gefixt
