@@ -4,6 +4,7 @@ import re
 import config
 import time
 import easyocr
+import numpy as np
 
 #reader = easyocr.Reader(['nl','en']) # this needs to run only once to load the model into memory
 #reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
@@ -12,10 +13,22 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 class OCR:
     def __init__(self):
-        self.languages = "eng+nld"
+        self.languages = "eng"  # Only English for speed
+        self.tesseract_config = r'--psm 6 --oem 1'  # PSM 6 = single text block, OEM 1 = Legacy engine (faster)
         self.keywords = [w.lower() for w in getattr(config, "EXPECTED_KEYWORDS", [])]
         self.date_regex = getattr(config, "DATE_REGEX", None)
         self.debug_draw_roi = getattr(config, "DEBUG_DRAW_ROI", False)
+
+    def _preprocess_image(self, gray):
+        """Enhance image contrast and clarity for faster OCR"""
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+
+        # Slight blur to reduce noise
+        denoised = cv2.medianBlur(enhanced, 3)
+
+        return denoised
 
     def _apply_roi(self, frame):
         roi = getattr(config, "ROI", None)
@@ -83,11 +96,15 @@ class OCR:
         roi_frame = self._apply_roi(frame)
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
 
+        # Preprocess for faster/better OCR
+        preprocessed = self._preprocess_image(gray)
+
         start_time = time.perf_counter()
 
         data = pytesseract.image_to_data(
-            gray,
+            preprocessed,
             lang=self.languages,
+            config=self.tesseract_config,
             output_type=pytesseract.Output.DICT
         )
 
