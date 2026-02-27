@@ -6,7 +6,7 @@ import time
 import easyocr
 
 #reader = easyocr.Reader(['nl','en']) # this needs to run only once to load the model into memory
-#reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
+reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
@@ -24,6 +24,37 @@ class OCR:
             cv2.rectangle(frame, (0, 0), (w, h), (0, 255, 0), 2)
         return frame
 
+    def run(self, frame):
+        roi_frame = self._apply_roi(frame)
+        gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
+
+        start_time = time.perf_counter()
+
+        # EasyOCR returns: [ [bbox, text, confidence], ... ]
+        results = reader.readtext(gray)
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+        detections = []
+
+        for bbox, text, conf in results:
+            if not text.strip():
+                continue
+
+            word = text.lower()
+
+            # Filter by keywords / regex if defined
+            if self.keywords and word not in self.keywords:
+                if self.date_regex and not re.search(self.date_regex, text):
+                    continue
+
+            detections.append({
+                "text": text,
+                "confidence": round(float(conf), 3)  # already 0–1
+            })
+
+        return detections, round(elapsed_ms, 1)
+"""
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
@@ -59,8 +90,9 @@ class OCR:
 
         # Return detections and processing time
         return detections, round(elapsed_ms, 1)
+    
 
-    """
+
     LET OP CHEFKE !!!!
     Return hetzelfde opbouwen als in objectdetection,
     nu is het anders en word het pas in de vision.py gefixt
