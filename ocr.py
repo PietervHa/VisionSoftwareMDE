@@ -14,13 +14,31 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 class OCR:
     def __init__(self):
         self.languages = "eng"  # Only English for speed
-        self.tesseract_config = r'--psm 6 --oem 1'  # PSM 6 = single text block, OEM 1 = Legacy engine (faster)
+        psm = getattr(config, "OCR_PSM", 6)
+        oem = getattr(config, "OCR_OEM", 1)
+        self.tesseract_config = f"--psm {psm} --oem {oem}"
+        whitelist = getattr(config, "OCR_WHITELIST", "")
+        if whitelist:
+            self.tesseract_config += f" -c tessedit_char_whitelist={whitelist}"
+        if getattr(config, "OCR_DISABLE_DAWGS", False):
+            self.tesseract_config += " -c load_system_dawg=0 -c load_freq_dawg=0"
         self.keywords = [w.lower() for w in getattr(config, "EXPECTED_KEYWORDS", [])]
         self.date_regex = getattr(config, "DATE_REGEX", None)
         self.debug_draw_roi = getattr(config, "DEBUG_DRAW_ROI", False)
+        self.preprocess_mode = getattr(config, "OCR_PREPROCESS", "clahe").lower()
+        self.downscale = float(getattr(config, "OCR_DOWNSCALE", 1.0))
+        self.min_dim = int(getattr(config, "OCR_MIN_DIM", 0))
 
     def _preprocess_image(self, gray):
         """Enhance image contrast and clarity for faster OCR"""
+        mode = self.preprocess_mode
+        if mode == "off":
+            return gray
+        if mode == "fast":
+            # Otsu thresholding is faster than CLAHE + blur.
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            return binary
+
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
@@ -29,6 +47,24 @@ class OCR:
         denoised = cv2.medianBlur(enhanced, 3)
 
         return denoised
+
+    def _downscale_roi(self, gray):
+        if self.downscale >= 1.0:
+            return gray
+
+        h, w = gray.shape[:2]
+        if self.min_dim and min(h, w) <= self.min_dim:
+            return gray
+
+        scale = self.downscale
+        if self.min_dim:
+            scale = max(scale, self.min_dim / float(min(h, w)))
+        if scale >= 1.0:
+            return gray
+
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        return cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _apply_roi(self, frame):
         roi = getattr(config, "ROI", None)
@@ -95,6 +131,8 @@ class OCR:
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
+
+        gray = self._downscale_roi(gray)
 
         # Preprocess for faster/better OCR
         preprocessed = self._preprocess_image(gray)

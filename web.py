@@ -42,6 +42,24 @@ def create_app(camera):
         return frame
 
     def generate_frames():
+        # Check if video feed is enabled
+        if not getattr(config, "ENABLE_VIDEO_FEED", True):
+            # Return a single black frame with text
+            import numpy as np
+            blank = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(blank, "Video feed disabled", (150, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            _, buffer = cv2.imencode(".jpg", blank)
+            while True:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + buffer.tobytes()
+                    + b"\r\n"
+                )
+                import time
+                time.sleep(1)  # Low CPU usage when disabled
+
         while True:
             frame = camera.get_frame()
             if frame is None:
