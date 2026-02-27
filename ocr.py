@@ -18,11 +18,34 @@ class OCR:
         self.debug_draw_roi = getattr(config, "DEBUG_DRAW_ROI", False)
 
     def _apply_roi(self, frame):
-        # Draw full-frame rectangle if debug enabled
+        roi = getattr(config, "ROI", None)
+        if not roi:
+            return frame
+
+        h, w = frame.shape[:2]
+
+        def _to_px(value, max_dim):
+            if value <= 1.0:
+                return int(round(value * max_dim))
+            return int(round(value))
+
+        x1 = _to_px(float(roi.get("x_start", 0.0)), w)
+        y1 = _to_px(float(roi.get("y_start", 0.0)), h)
+        x2 = _to_px(float(roi.get("x_end", 1.0)), w)
+        y2 = _to_px(float(roi.get("y_end", 1.0)), h)
+
+        x1 = max(0, min(w - 1, x1))
+        x2 = max(0, min(w - 1, x2))
+        y1 = max(0, min(h - 1, y1))
+        y2 = max(0, min(h - 1, y2))
+
+        if x2 <= x1 or y2 <= y1:
+            return frame
+
         if self.debug_draw_roi:
-            h, w = frame.shape[:2]
-            cv2.rectangle(frame, (0, 0), (w, h), (0, 255, 0), 2)
-        return frame
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        return frame[y1:y2, x1:x2]
 
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
