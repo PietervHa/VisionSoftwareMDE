@@ -126,7 +126,11 @@ class OCR:
                 "confidence": round(float(conf), 3)  # already 0–1
             })
 
-        return detections, round(elapsed_ms, 1)
+        return {
+            "detections": detections,
+            "processing_time_ms": round(elapsed_ms, 1),
+            "mode": "ocr"
+        }
 """
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
@@ -168,11 +172,11 @@ class OCR:
             })
 
         # Return detections and processing time
-        return detections, round(elapsed_ms, 1)
+        return {
+            "detections": detections,
+            "processing_time_ms": round(elapsed_ms, 1),
+            "mode": "ocr"
+        }
 
 
-    """
-    LET OP CHEFKE !!!!
-    Return hetzelfde opbouwen als in objectdetection,
-    nu is het anders en word het pas in de vision.py gefixt
-    """
+
