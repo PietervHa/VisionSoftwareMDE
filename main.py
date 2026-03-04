@@ -4,6 +4,38 @@ from camera import Camera
 from vision import run_vision
 from web import create_app
 import state
+import time
+
+def _process_vision_result(result, trigger_time):
+    """Callback to handle vision results from background thread"""
+    # Calculate total cycle time from trigger to result
+    cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
+
+    with state.lock:
+        threshold = state.confidence_threshold
+
+    high_conf = [
+        d for d in result["detections"]
+        if d["confidence"] >= threshold
+    ]
+
+    status = "OK" if high_conf else "NOK"
+
+    with state.lock:
+        state.latest_result = {
+            **result,
+            "status": status,
+            "confidence_threshold": threshold,
+            "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
+        }
+
+        state.counters["total"] += 1
+        if status == "OK":
+            state.counters["ok"] += 1
+        else:
+            state.counters["nok"] += 1
+
+    print(f"VISION RESULT: {state.latest_result}")
 
 def vision_trigger_loop(camera):
     print("Press 'Q' to trigger vision. Ctrl+C to exit.")
@@ -16,32 +48,12 @@ def vision_trigger_loop(camera):
             print("No frame available")
             continue
 
-        result = run_vision(frame)
+        # Track trigger time for cycle time measurement
+        trigger_time = time.perf_counter()
 
-        with state.lock:
-            threshold = state.confidence_threshold
-
-        high_conf = [
-            d for d in result["detections"]
-            if d["confidence"] >= threshold
-        ]
-
-        status = "OK" if high_conf else "NOK"
-
-        with state.lock:
-            state.latest_result = {
-                **result,
-                "status": status,
-                "confidence_threshold": threshold
-            }
-
-            state.counters["total"] += 1
-            if status == "OK":
-                state.counters["ok"] += 1
-            else:
-                state.counters["nok"] += 1
-
-        print(f"VISION RESULT: {state.latest_result}")
+        # Trigger OCR in background thread with callback
+        run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time))
+        print("Vision processing started (non-blocking)")
 
 def main():
     camera = Camera(0)

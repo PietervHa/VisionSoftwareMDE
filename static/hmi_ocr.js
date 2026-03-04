@@ -28,8 +28,9 @@ async function updateResult() {
                 .join("<br>")
             : "No words detected";
 
-        document.getElementById("time").textContent =
-            data.result.processing_time_ms + " ms";
+        // Show cycle time (total time from trigger to result)
+        const cycleTime = data.result.cycle_time_ms || data.result.processing_time_ms;
+        document.getElementById("time").textContent = cycleTime + " ms";
 
         document.getElementById("okCount").textContent = data.counters.ok;
         document.getElementById("nokCount").textContent = data.counters.nok;
