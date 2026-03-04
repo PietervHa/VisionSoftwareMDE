@@ -17,12 +17,7 @@ def run_vision(frame):
     based on VISION_MODE configuration.
     """
     if VISION_MODE == "ocr":
-        detections, elapsed_ms = ocr_instance.run(frame)
-        return {
-            "detections": detections,
-            "mode": "ocr",
-            "processing_time_ms": elapsed_ms
-        }
+        return ocr_instance.run(frame)
     elif VISION_MODE == "object_detection":
         return run_object_detection(frame)
     else:
