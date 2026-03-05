@@ -41,7 +41,7 @@ async function updateResult() {
     }
 }
 
-setInterval(updateResult, 500);
+setInterval(updateResult, 100);
 
 /* =========================
    THRESHOLD HANDLING
