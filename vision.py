@@ -1,16 +1,31 @@
 from objectdetection import run_object_detection
 from ocr import OCR
 import threading
+import time
 
 # Hardcode the vision mode: "ocr" or "object_detection"
 #VISION_MODE = "object_detection"  # Change to "ocr" to use OCR mode
-VISION_MODE = "object_detection"
+VISION_MODE = "ocr"
 
 ocr_instance = OCR()
 
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
-    thread = threading.Thread(target=lambda: callback(fn(frame)), daemon=True)
+    def worker():
+        start = time.perf_counter()
+        try:
+            result = fn(frame)
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            result = {
+                "detections": [],
+                "processing_time_ms": duration_ms,
+                "mode": VISION_MODE,
+                "error": str(exc),
+            }
+        callback(result)
+
+    thread = threading.Thread(target=worker, daemon=True)
     thread.start()
 
 def run_vision(frame, callback=None):
