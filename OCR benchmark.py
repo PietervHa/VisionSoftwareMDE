@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import statistics
 import threading
 import time
@@ -54,8 +55,8 @@ class OCRBenchmark:
             completed_frames = self.completed_count
             if completed_frames % 10 == 0:
                 last_10 = self.results[-10:]
-                avg_proc = round(sum(r["processing_time_ms"] for r in last_10) / 10, 2)
-                avg_cycle = round(sum(r["cycle_time_ms"] for r in last_10) / 10, 2)
+                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / 10)
+                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / 10)
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames

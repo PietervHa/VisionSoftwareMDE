@@ -5,7 +5,7 @@ import time
 
 # Hardcode the vision mode: "ocr" or "object_detection"
 #VISION_MODE = "object_detection"  # Change to "ocr" to use OCR mode
-VISION_MODE = "object_detection"
+VISION_MODE = "ocr"
 
 ocr_instance = OCR()
 
