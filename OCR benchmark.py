@@ -1,66 +1,83 @@
-import time
-import threading
-import statistics
-from camera import Camera
-from vision import run_vision, ocr_instance
-from pathlib import Path
+import argparse
 import json
+import statistics
+import threading
+import time
 from datetime import datetime
+from pathlib import Path
+
+from camera import Camera
+import vision
 
 
 class OCRBenchmark:
     """
-    Benchmark class to test OCR cycle performance over 30 seconds.
-    Runs OCR asynchronously (like production main.py) to measure real throughput.
-    Measures cycle time, processing time, detection counts, and statistics.
+    Benchmark OCR throughput and per-frame timing.
+    Uses the same async callback pattern as main.py.
     """
 
-    def __init__(self, duration_seconds=30):
+    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=2):
         self.duration = duration_seconds
+        self.flush_wait_seconds = flush_wait_seconds
+        self.max_inflight = max_inflight
         self.results = []
         self.lock = threading.Lock()
         self.running = False
         self.start_time = None
         self.frame_count = 0
+        self.completed_count = 0
+        self.error_count = 0
+        self._inflight = 0
 
     def _on_vision_result(self, result, trigger_time, frame_num):
-        """Callback to handle async vision results (matches main.py pattern)"""
-        # Use the processing_time from inside OCR - this is the actual work time
-        processing_time_ms = result.get("processing_time_ms", 0)
+        """Callback to handle async OCR results."""
+        cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 2)
+        processing_time_ms = float(result.get("processing_time_ms", 0.0))
+        detections = result.get("detections", [])
+        error_message = result.get("error")
 
         with self.lock:
-            self.results.append({
-                "frame_num": frame_num,
-                "cycle_time_ms": processing_time_ms,
-                "processing_time_ms": processing_time_ms,
-                "detection_count": len(result.get("detections", []))
-            })
+            self.results.append(
+                {
+                    "frame_num": frame_num,
+                    "cycle_time_ms": cycle_time_ms,
+                    "processing_time_ms": processing_time_ms,
+                    "detection_count": len(detections),
+                    "error": error_message,
+                }
+            )
+            self.completed_count += 1
+            if error_message:
+                self.error_count += 1
+            self._inflight = max(0, self._inflight - 1)
 
-            # Print progress every 10 frames with average stats
-            if frame_num % 10 == 0:
-                # Get the last 10 results
-                last_10 = self.results[-10:] if len(self.results) >= 10 else self.results
-                avg_ms = sum(r["processing_time_ms"] for r in last_10) / len(last_10) / 10
+            completed_frames = self.completed_count
+            if completed_frames % 10 == 0:
+                last_10 = self.results[-10:]
+                avg_proc = round(sum(r["processing_time_ms"] for r in last_10) / 10, 2)
+                avg_cycle = round(sum(r["cycle_time_ms"] for r in last_10) / 10, 2)
                 total_detections = sum(r["detection_count"] for r in last_10)
-                print(f"  Frames {frame_num-9} to {frame_num}: {avg_ms:.2f}ms avg OCR, "
-                      f"{total_detections} detections")
+                batch_start = completed_frames - 9
+                batch_end = completed_frames
+                print(
+                    f"  Frames {batch_start}-{batch_end}: "
+                    f"{avg_proc}ms avg OCR, {avg_cycle}ms avg cycle, "
+                    f"{total_detections} detections"
+                )
 
     def run_benchmark(self, camera):
-        """
-        Run OCR benchmark for specified duration.
-        Triggers OCR asynchronously on frames (non-blocking, like production).
-        This measures real throughput - how many frames can be processed in parallel.
-        """
         print(f"Starting OCR Benchmark ({self.duration} seconds)...")
-        print("Processing frames asynchronously (matches production behavior)...\n")
+        print("Processing frames asynchronously (matches production behavior)...\\n")
 
         self.running = True
         self.start_time = time.perf_counter()
         self.frame_count = 0
+        self.completed_count = 0
+        self.error_count = 0
+        self._inflight = 0
 
         while self.running:
             elapsed = time.perf_counter() - self.start_time
-
             if elapsed >= self.duration:
                 self.running = False
                 break
@@ -70,33 +87,64 @@ class OCRBenchmark:
                 continue
 
             self.frame_count += 1
-            trigger_time = time.perf_counter()
 
-            # Run OCR asynchronously in background thread (like main.py does)
-            run_vision(
+            # Apply backpressure to avoid unlimited OCR worker buildup.
+            while True:
+                with self.lock:
+                    if self._inflight < self.max_inflight:
+                        self._inflight += 1
+                        break
+                if (time.perf_counter() - self.start_time) >= self.duration:
+                    break
+                time.sleep(0.001)
+
+            if (time.perf_counter() - self.start_time) >= self.duration:
+                with self.lock:
+                    self._inflight = max(0, self._inflight - 1)
+                self.frame_count -= 1
+                break
+
+            # Cycle starts when the async OCR job is actually dispatched.
+            trigger_time = time.perf_counter()
+            vision.run_vision(
                 frame,
-                callback=lambda result, tt=trigger_time, fn=self.frame_count:
-                    self._on_vision_result(result, tt, fn)
+                callback=lambda result, tt=trigger_time, fn=self.frame_count: self._on_vision_result(
+                    result, tt, fn
+                ),
             )
 
-        # Wait for remaining background threads to finish
-        print(f"\nBenchmark time elapsed. Waiting for remaining OCR threads to finish...")
-        time.sleep(2)  # Give threads time to complete
+        elapsed = time.perf_counter() - self.start_time
+        print("\\nBenchmark time elapsed. Waiting for remaining OCR threads to finish...")
 
-        print(f"Benchmark complete! Triggered {self.frame_count} frames in {elapsed:.1f}s\n")
+        wait_start = time.perf_counter()
+        while True:
+            with self.lock:
+                inflight = self._inflight
+            if inflight == 0:
+                break
+            if (time.perf_counter() - wait_start) >= self.flush_wait_seconds:
+                print(f"  Flush timeout reached with {inflight} in-flight job(s) still running.")
+                break
+            time.sleep(0.01)
+
+        print(
+            f"Benchmark complete! Triggered {self.frame_count} frames in {elapsed:.1f}s; "
+            f"completed {self.completed_count}, errors {self.error_count}.\\n"
+        )
         return self.results
 
     def get_statistics(self):
-        """Calculate and return performance statistics"""
         if not self.results:
             return None
 
-        cycle_times = [r["cycle_time_ms"] / 10 for r in self.results]
-        processing_times = [r["processing_time_ms"] / 10 for r in self.results]
+        cycle_times = [r["cycle_time_ms"] for r in self.results]
+        processing_times = [r["processing_time_ms"] for r in self.results]
         detection_counts = [r["detection_count"] for r in self.results]
 
         stats = {
-            "total_frames": len(self.results),
+            "total_frames_triggered": self.frame_count,
+            "total_frames_completed": len(self.results),
+            "failed_frames": self.error_count,
             "duration_seconds": self.duration,
             "frames_per_second": round(len(self.results) / self.duration, 2),
             "cycle_time": {
@@ -104,78 +152,72 @@ class OCRBenchmark:
                 "max_ms": round(max(cycle_times), 2),
                 "mean_ms": round(statistics.mean(cycle_times), 2),
                 "median_ms": round(statistics.median(cycle_times), 2),
-                "stdev_ms": round(statistics.stdev(cycle_times), 2) if len(cycle_times) > 1 else 0
+                "stdev_ms": round(statistics.stdev(cycle_times), 2) if len(cycle_times) > 1 else 0,
             },
             "processing_time": {
                 "min_ms": round(min(processing_times), 2),
                 "max_ms": round(max(processing_times), 2),
                 "mean_ms": round(statistics.mean(processing_times), 2),
                 "median_ms": round(statistics.median(processing_times), 2),
-                "stdev_ms": round(statistics.stdev(processing_times), 2) if len(processing_times) > 1 else 0
+                "stdev_ms": round(statistics.stdev(processing_times), 2)
+                if len(processing_times) > 1
+                else 0,
             },
             "detections": {
                 "total": sum(detection_counts),
-                "min": min(detection_counts),
-                "max": max(detection_counts),
-                "mean": round(statistics.mean(detection_counts), 2)
-            }
+                "min_per_frame": min(detection_counts),
+                "max_per_frame": max(detection_counts),
+                "mean_per_frame": round(statistics.mean(detection_counts), 2),
+            },
         }
 
         return stats
 
     def save_results(self, output_dir="benchmark_results"):
-        """
-        Save benchmark results to a JSON file in the specified directory.
-        Creates directory if it doesn't exist.
-        """
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)
 
-        # Generate timestamped filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = output_path / f"ocr_benchmark_{timestamp}.json"
-
-        stats = self.get_statistics()
 
         report = {
             "timestamp": datetime.now().isoformat(),
             "benchmark_duration_seconds": self.duration,
-            "statistics": stats,
-            "detailed_results": self.results
+            "vision_mode": vision.VISION_MODE,
+            "statistics": self.get_statistics(),
+            "detailed_results": self.results,
         }
 
-        with open(filename, "w") as f:
+        with open(filename, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
         print(f"Results saved to: {filename}")
         return filename
 
     def print_summary(self):
-        """Print a summary of the benchmark results"""
         stats = self.get_statistics()
-
         if not stats:
             print("No results to display.")
             return
 
-        print("\n" + "="*60)
-        print("OCR BENCHMARK SUMMARY (ASYNC - PRODUCTION MODE)")
-        print("="*60)
-        print("Mode: Asynchronous (non-blocking) - matches production main.py behavior")
+        print("\\n" + "=" * 60)
+        print("OCR BENCHMARK SUMMARY")
+        print("=" * 60)
+        print(f"Mode: {vision.VISION_MODE}")
         print(f"Benchmark Duration: {stats['duration_seconds']} seconds")
-        print(f"Total Frame Triggers: {stats['total_frames']}")
-        print(f"FPS (Throughput): {stats['frames_per_second']} frames/sec")
+        print(f"Completed Frames: {stats['total_frames_completed']}")
+        print(f"Triggered Frames: {stats['total_frames_triggered']}")
+        print(f"Failed Frames: {stats['failed_frames']}")
+        print(f"FPS (Completed): {stats['frames_per_second']} frames/sec")
         print()
-        print("CYCLE TIME (OCR Execution):")
-        print("  (Pure OCR processing time measured inside inference)")
+        print("CYCLE TIME (Trigger -> callback complete):")
         print(f"  Min:    {stats['cycle_time']['min_ms']} ms")
         print(f"  Max:    {stats['cycle_time']['max_ms']} ms")
         print(f"  Mean:   {stats['cycle_time']['mean_ms']} ms")
         print(f"  Median: {stats['cycle_time']['median_ms']} ms")
         print(f"  StdDev: {stats['cycle_time']['stdev_ms']} ms")
         print()
-        print("PROCESSING TIME (Same as Cycle Time):")
-        print("  (Pure Tesseract/EasyOCR execution time)")
+        print("PROCESSING TIME (OCR inference):")
         print(f"  Min:    {stats['processing_time']['min_ms']} ms")
         print(f"  Max:    {stats['processing_time']['max_ms']} ms")
         print(f"  Mean:   {stats['processing_time']['mean_ms']} ms")
@@ -183,30 +225,61 @@ class OCRBenchmark:
         print(f"  StdDev: {stats['processing_time']['stdev_ms']} ms")
         print()
         print("DETECTIONS:")
-        print(f"  Total:  {stats['detections']['total']}")
-        print(f"  Min per frame:  {stats['detections']['min']}")
-        print(f"  Max per frame:  {stats['detections']['max']}")
-        print(f"  Mean per frame: {stats['detections']['mean']}")
-        print("="*60 + "\n")
+        print(f"  Total:          {stats['detections']['total']}")
+        print(f"  Min per frame:  {stats['detections']['min_per_frame']}")
+        print(f"  Max per frame:  {stats['detections']['max_per_frame']}")
+        print(f"  Mean per frame: {stats['detections']['mean_per_frame']}")
+        print("=" * 60 + "\\n")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run OCR benchmark")
+    parser.add_argument("--duration", type=int, default=30, help="Benchmark duration in seconds")
+    parser.add_argument(
+        "--output-dir",
+        default="benchmark_results",
+        help="Directory to write benchmark json reports",
+    )
+    parser.add_argument(
+        "--flush-wait",
+        type=float,
+        default=2.0,
+        help="Seconds to wait after trigger loop for worker completion",
+    )
+    parser.add_argument(
+        "--max-inflight",
+        type=int,
+        default=2,
+        help="Maximum in-flight async OCR jobs",
+    )
+    return parser.parse_args()
 
 
 def main():
-    """Run the benchmark"""
+    args = parse_args()
+
+    if vision.VISION_MODE != "ocr":
+        print(f"Forcing VISION_MODE from '{vision.VISION_MODE}' to 'ocr' for benchmark.")
+    vision.VISION_MODE = "ocr"
+
     camera = Camera(0)
-    benchmark = OCRBenchmark(duration_seconds=30)
+    benchmark = OCRBenchmark(
+        duration_seconds=args.duration,
+        flush_wait_seconds=args.flush_wait,
+        max_inflight=max(1, args.max_inflight),
+    )
 
     try:
         benchmark.run_benchmark(camera)
         benchmark.print_summary()
-        benchmark.save_results()
+        benchmark.save_results(args.output_dir)
     except KeyboardInterrupt:
-        print("\nBenchmark interrupted by user.")
+        print("\\nBenchmark interrupted by user.")
         benchmark.print_summary()
-        benchmark.save_results()
+        benchmark.save_results(args.output_dir)
     finally:
         camera.release()
 
 
 if __name__ == "__main__":
     main()
-

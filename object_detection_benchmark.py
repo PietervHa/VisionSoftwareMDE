@@ -86,7 +86,6 @@ class ObjectDetectionBenchmark:
                 continue
 
             self.frame_count += 1
-            trigger_time = time.perf_counter()
 
             # Apply backpressure so OD workers can complete and produce data.
             while True:
@@ -104,6 +103,8 @@ class ObjectDetectionBenchmark:
                 self.frame_count -= 1
                 break
 
+            # Cycle starts when the async vision job is actually dispatched.
+            trigger_time = time.perf_counter()
             vision.run_vision(
                 frame,
                 callback=lambda result, tt=trigger_time, fn=self.frame_count: self._on_vision_result(
