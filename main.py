@@ -6,6 +6,7 @@ from web import create_app
 import state
 import time
 from config_loader import cfg
+from utils.logger import setup_logging
 
 def _process_vision_result(result, trigger_time):
     """Callback to handle vision results from background thread"""
@@ -73,4 +74,5 @@ def main():
     vision_trigger_loop(camera)
 
 if __name__ == "__main__":
+    setup_logging()
     main()
