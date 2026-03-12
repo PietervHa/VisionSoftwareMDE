@@ -5,6 +5,7 @@ from vision import run_vision
 from web import create_app
 import state
 import time
+from config_loader import cfg
 
 def _process_vision_result(result, trigger_time):
     """Callback to handle vision results from background thread"""
@@ -56,11 +57,15 @@ def vision_trigger_loop(camera):
         print("Vision processing started (non-blocking)")
 
 def main():
+    with state.lock:
+        state.confidence_threshold = float(cfg["confidence_threshold"])
+
     camera = Camera(0)
 
+    web_cfg = cfg["web"]
     app = create_app(camera)
     web_thread = threading.Thread(
-        target=lambda: app.run(host="0.0.0.0", port=5000, threaded=True),
+        target=lambda: app.run(host=web_cfg["host"], port=web_cfg["port"], threaded=True),
         daemon=True,
     )
     web_thread.start()

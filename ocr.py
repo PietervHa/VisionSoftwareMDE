@@ -1,33 +1,32 @@
 import pytesseract
 import cv2
 import re
-import config
 import time
 import easyocr
 import numpy as np
+from config_loader import cfg
 
-#reader = easyocr.Reader(['nl','en']) # this needs to run only once to load the model into memory
-#reader = easyocr.Reader(['nl','en'], gpu=False) # enable this instead to use CPU only
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+pytesseract.pytesseract.tesseract_cmd = cfg["ocr"]["tesseract_path"]
 
 
 class OCR:
     def __init__(self):
         self.languages = "eng"  # Only English for speed
-        psm = getattr(config, "OCR_PSM", 6)
-        oem = getattr(config, "OCR_OEM", 1)
+        ocr_cfg = cfg["ocr"]
+        psm = ocr_cfg["psm"]
+        oem = ocr_cfg["oem"]
         self.tesseract_config = f"--psm {psm} --oem {oem}"
-        whitelist = getattr(config, "OCR_WHITELIST", "")
+        whitelist = ocr_cfg["whitelist"]
         if whitelist:
             self.tesseract_config += f" -c tessedit_char_whitelist={whitelist}"
-        if getattr(config, "OCR_DISABLE_DAWGS", False):
+        if ocr_cfg["disable_dawgs"]:
             self.tesseract_config += " -c load_system_dawg=0 -c load_freq_dawg=0"
-        self.keywords = [w.lower() for w in getattr(config, "EXPECTED_KEYWORDS", [])]
-        self.date_regex = getattr(config, "DATE_REGEX", None)
-        self.debug_draw_roi = getattr(config, "DEBUG_DRAW_ROI", False)
-        self.preprocess_mode = getattr(config, "OCR_PREPROCESS", "clahe").lower()
-        self.downscale = float(getattr(config, "OCR_DOWNSCALE", 1.0))
-        self.min_dim = int(getattr(config, "OCR_MIN_DIM", 0))
+        self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
+        self.date_regex = ocr_cfg["date_regex"]
+        self.debug_draw_roi = cfg["hmi"]["debug_draw_roi"]
+        self.preprocess_mode = ocr_cfg["preprocess"].lower()
+        self.downscale = float(ocr_cfg["downscale"])
+        self.min_dim = int(ocr_cfg["min_dim"])
 
     def _preprocess_image(self, gray):
         """Enhance image contrast and clarity for faster OCR"""
@@ -67,7 +66,7 @@ class OCR:
         return cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _apply_roi(self, frame):
-        roi = getattr(config, "ROI", None)
+        roi = cfg.get("roi")
         if not roi:
             return frame
 
@@ -177,6 +176,5 @@ class OCR:
             "processing_time_ms": round(elapsed_ms, 1),
             "mode": "ocr"
         }
-
 
 

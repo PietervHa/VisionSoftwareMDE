@@ -3,12 +3,14 @@ import threading
 import time
 import cv2
 from ultralytics import YOLO
+from config_loader import cfg
 
 # Reduce Ultralytics console noise (startup banner/verbose logs).
 os.environ.setdefault("YOLO_VERBOSE", "False")
 
 # Load YOLO model ONCE
-model = YOLO("yolov8n.pt")  # nano = fast, CPU friendly
+od_cfg = cfg["object_detection"]
+model = YOLO(od_cfg["model_path"])  # nano = fast, CPU friendly
 _model_lock = threading.Lock()
 
 
@@ -17,7 +19,8 @@ def run_object_detection(frame):
 
     try:
         # Optional: resize for speed (recommended)
-        frame_resized = cv2.resize(frame, (640, 640))
+        inference_size = od_cfg["inference_size"]
+        frame_resized = cv2.resize(frame, (inference_size, inference_size))
 
         # Run YOLO inference (guard shared model access across threads)
         with _model_lock:

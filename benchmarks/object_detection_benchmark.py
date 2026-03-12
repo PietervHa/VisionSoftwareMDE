@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from camera import Camera
+from config_loader import cfg
 import vision
 
 
@@ -183,7 +184,7 @@ class ObjectDetectionBenchmark:
         report = {
             "timestamp": datetime.now().isoformat(),
             "benchmark_duration_seconds": self.duration,
-            "vision_mode": vision.VISION_MODE,
+            "vision_mode": cfg["vision_mode"],
             "statistics": self.get_statistics(),
             "detailed_results": self.results,
         }
@@ -203,7 +204,7 @@ class ObjectDetectionBenchmark:
         print("\\n" + "=" * 60)
         print("OBJECT DETECTION BENCHMARK SUMMARY")
         print("=" * 60)
-        print(f"Mode: {vision.VISION_MODE}")
+        print(f"Mode: {cfg['vision_mode']}")
         print(f"Benchmark Duration: {stats['duration_seconds']} seconds")
         print(f"Completed Frames: {stats['total_frames_completed']}")
         print(f"Triggered Frames: {stats['total_frames_triggered']}")
@@ -258,9 +259,12 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if vision.VISION_MODE != "object_detection":
-        print(f"Forcing VISION_MODE from '{vision.VISION_MODE}' to 'object_detection' for benchmark.")
-    vision.VISION_MODE = "object_detection"
+    if cfg["vision_mode"] != "object_detection":
+        print(
+            f"Config vision_mode is '{cfg['vision_mode']}'. "
+            "Set vision_mode to 'object_detection' in config before running this benchmark."
+        )
+        return
 
     camera = Camera(0)
     benchmark = ObjectDetectionBenchmark(
