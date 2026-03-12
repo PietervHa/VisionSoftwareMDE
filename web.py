@@ -48,14 +48,14 @@ def create_app(camera):
             import numpy as np
             blank = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(blank, "Video feed disabled", (150, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             _, buffer = cv2.imencode(".jpg", blank)
             while True:
                 yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n"
-                    + buffer.tobytes()
-                    + b"\r\n"
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + buffer.tobytes()
+                        + b"\r\n"
                 )
                 import time
                 time.sleep(1)  # Low CPU usage when disabled
@@ -71,10 +71,10 @@ def create_app(camera):
 
             _, buffer = cv2.imencode(".jpg", frame_for_stream)
             yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n"
-                + buffer.tobytes()
-                + b"\r\n"
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + buffer.tobytes()
+                    + b"\r\n"
             )
 
     @app.route("/")
@@ -83,6 +83,14 @@ def create_app(camera):
             return send_file("templates/CFF_OCR.html")
         else:
             return send_file("templates/CFF.html")
+
+    @app.route("/status")
+    def get_status():
+        return jsonify({
+            "vision_mode": cfg["vision_mode"],
+            "machine_id": cfg["machine_id"],
+            "version": "1.0.0"
+        })
 
     @app.route("/result")
     def get_result():
