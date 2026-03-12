@@ -3,7 +3,6 @@ from flask import Flask, Response, send_file
 from flask_cors import CORS
 import state
 from flask import jsonify, request
-from vision import VISION_MODE
 from config_loader import cfg
 
 def create_app(camera):
@@ -79,10 +78,15 @@ def create_app(camera):
 
     @app.route("/")
     def index():
-        if VISION_MODE == "ocr":
-            return send_file("templates/CFF_OCR.html")
-        else:
-            return send_file("templates/CFF.html")
+        return send_file("templates/hmi.html")
+
+    @app.route("/status")
+    def get_status():
+        return jsonify({
+            "vision_mode": cfg["vision_mode"],
+            "machine_id": cfg["machine_id"],
+            "version": "1.0.0"
+        })
 
     @app.route("/result")
     def get_result():

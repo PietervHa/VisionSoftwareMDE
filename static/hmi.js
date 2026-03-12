@@ -1,4 +1,5 @@
 let CURRENT_MODE = "maintenance";
+let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
 const PASSWORD = "@Welkom01"; // hardcoded for now
 
@@ -21,14 +22,23 @@ async function updateResult() {
             statusEl.className = "status nok";
         }
 
-        detEl.innerHTML = data.result.detections.length
-            ? data.result.detections
-                .map(d => `${d.label} (${(d.confidence * 100).toFixed(1)}%)`)
-                .join("<br>")
+        const noResultsText = VISION_MODE === "ocr"
+            ? "No words detected"
             : "No objects detected";
 
-        document.getElementById("time").textContent =
-            data.result.processing_time_ms + " ms";
+        detEl.innerHTML = data.result.detections.length
+            ? data.result.detections
+                .map(d => {
+                    const value = VISION_MODE === "ocr" ? d.text : d.label;
+                    return `${value} (${(d.confidence * 100).toFixed(1)}%)`;
+                })
+                .join("<br>")
+            : noResultsText;
+
+        const timeValue = VISION_MODE === "ocr"
+            ? (data.result.cycle_time_ms || data.result.processing_time_ms)
+            : data.result.processing_time_ms;
+        document.getElementById("time").textContent = timeValue + " ms";
 
         document.getElementById("okCount").textContent = data.counters.ok;
         document.getElementById("nokCount").textContent = data.counters.nok;
@@ -39,7 +49,20 @@ async function updateResult() {
     }
 }
 
-setInterval(updateResult, 500);
+async function loadStatus() {
+    const res = await fetch("/status");
+    const data = await res.json();
+    VISION_MODE = data.vision_mode;
+}
+
+function getPollingIntervalMs() {
+    return VISION_MODE === "ocr" ? 100 : 500;
+}
+
+function startResultPolling() {
+    updateResult();
+    setInterval(updateResult, getPollingIntervalMs());
+}
 
 /* =========================
    THRESHOLD HANDLING
@@ -144,4 +167,16 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
 /* =========================
    INIT
 ========================= */
-loadThreshold().then(applyMode);
+async function init() {
+    try {
+        // Resolve mode first so all downstream behavior is mode-aware.
+        await loadStatus();
+        await loadThreshold();
+        applyMode();
+        startResultPolling();
+    } catch (e) {
+        console.error("Initialization failed:", e);
+    }
+}
+
+init();
