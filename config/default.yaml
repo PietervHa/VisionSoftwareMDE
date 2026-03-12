@@ -2,22 +2,22 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "ocr"
+vision_mode: "object_detection"
 machine_id: "default"
 confidence_threshold: 0.8
 
 # Region of Interest (ROI) settings
-ROI:
+roi:
   x_start: 0.0
   y_start: 0.6667
   x_end: 1.0
   y_end: 1.0
 
 # OCR settings
-OCR:
+ocr:
   keywords:
     - "www.theimagingsource.com"
-  date_regex: '\b\d{2}/\d{2}/\d{4}\b'
+  date_regex: '\\b\\d{2}/\\d{2}/\\d{4}\\b'
   preprocess: "fast"
   downscale: 0.6
   min_dim: 240
@@ -28,24 +28,23 @@ OCR:
   tesseract_path: "C:/Program Files/Tesseract-OCR/tesseract.exe"
 
 # Camera settings
-Camera:
+camera:
   index: 0
   width: 1280
   height: 1024
   flip: -1
 
 # Object detection settings
-ObjectDetection:
+object_detection:
   model_path: "models/yolov8n.pt"
   inference_size: 640
 
 # HMI settings
-HMI:
+hmi:
   debug_draw_roi: true
   enable_video_feed: true
 
 # Web settings
-Web:
+web:
   host: "0.0.0.0"
   port: 5000
-

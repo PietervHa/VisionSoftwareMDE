@@ -2,12 +2,13 @@ from objectdetection import run_object_detection
 from ocr import OCR
 import threading
 import time
+from config_loader import cfg
 
-# Hardcode the vision mode: "ocr" or "object_detection"
-#VISION_MODE = "object_detection"  # Change to "ocr" to use OCR mode
-VISION_MODE = "ocr"
+# Backward-compatible alias; primary source is cfg["vision_mode"].
+VISION_MODE = cfg["vision_mode"]
 
 ocr_instance = OCR()
+
 
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
@@ -20,13 +21,14 @@ def _run_with_callback(fn, frame, callback):
             result = {
                 "detections": [],
                 "processing_time_ms": duration_ms,
-                "mode": VISION_MODE,
+                "mode": cfg["vision_mode"],
                 "error": str(exc),
             }
         callback(result)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
+
 
 def run_vision(frame, callback=None):
     """
@@ -36,16 +38,16 @@ def run_vision(frame, callback=None):
     If callback is provided, runs selected vision mode in a background thread.
     Otherwise, runs synchronously.
     """
-    if VISION_MODE == "ocr":
+    if cfg["vision_mode"] == "ocr":
         if callback:
             _run_with_callback(ocr_instance.run, frame, callback)
             return None
         return ocr_instance.run(frame)
 
-    if VISION_MODE == "object_detection":
+    if cfg["vision_mode"] == "object_detection":
         if callback:
             _run_with_callback(run_object_detection, frame, callback)
             return None
         return run_object_detection(frame)
 
-    raise ValueError(f"Unknown VISION_MODE: {VISION_MODE}")
+    raise ValueError(f"Unknown VISION_MODE: {cfg['vision_mode']}")

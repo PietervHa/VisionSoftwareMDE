@@ -4,17 +4,17 @@ from flask_cors import CORS
 import state
 from flask import jsonify, request
 from vision import VISION_MODE
-import config
+from config_loader import cfg
 
 def create_app(camera):
     app = Flask(__name__)
     CORS(app)
 
     def _draw_roi(frame):
-        if not getattr(config, "DEBUG_DRAW_ROI", False):
+        if not cfg["hmi"]["debug_draw_roi"]:
             return frame
 
-        roi = getattr(config, "ROI", None)
+        roi = cfg.get("roi")
         if not roi:
             return frame
 
@@ -43,7 +43,7 @@ def create_app(camera):
 
     def generate_frames():
         # Check if video feed is enabled
-        if not getattr(config, "ENABLE_VIDEO_FEED", True):
+        if not cfg["hmi"]["enable_video_feed"]:
             # Return a single black frame with text
             import numpy as np
             blank = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -66,7 +66,7 @@ def create_app(camera):
                 continue
 
             frame_for_stream = frame
-            if getattr(config, "DEBUG_DRAW_ROI", False):
+            if cfg["hmi"]["debug_draw_roi"]:
                 frame_for_stream = _draw_roi(frame.copy())
 
             _, buffer = cv2.imencode(".jpg", frame_for_stream)
