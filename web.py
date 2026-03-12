@@ -3,7 +3,6 @@ from flask import Flask, Response, send_file
 from flask_cors import CORS
 import state
 from flask import jsonify, request
-from vision import VISION_MODE
 from config_loader import cfg
 
 def create_app(camera):
@@ -48,14 +47,14 @@ def create_app(camera):
             import numpy as np
             blank = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(blank, "Video feed disabled", (150, 240),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             _, buffer = cv2.imencode(".jpg", blank)
             while True:
                 yield (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n\r\n"
-                        + buffer.tobytes()
-                        + b"\r\n"
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n"
+                    + buffer.tobytes()
+                    + b"\r\n"
                 )
                 import time
                 time.sleep(1)  # Low CPU usage when disabled
@@ -71,18 +70,15 @@ def create_app(camera):
 
             _, buffer = cv2.imencode(".jpg", frame_for_stream)
             yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n"
-                    + buffer.tobytes()
-                    + b"\r\n"
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + buffer.tobytes()
+                + b"\r\n"
             )
 
     @app.route("/")
     def index():
-        if VISION_MODE == "ocr":
-            return send_file("templates/CFF_OCR.html")
-        else:
-            return send_file("templates/CFF.html")
+        return send_file("templates/hmi.html")
 
     @app.route("/status")
     def get_status():
