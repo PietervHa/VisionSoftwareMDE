@@ -2,7 +2,7 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "object_detection"
+vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection"
 machine_id: "default"
 confidence_threshold: 0.8
 
@@ -17,7 +17,8 @@ roi:
 ocr:
   keywords:
     - "www.theimagingsource.com"
-  date_regex: '\\b\\d{2}/\\d{2}/\\d{4}\\b'
+  # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
+  date_regex: '\b\d{2}/\d{2}/\d{4}\b'
   preprocess: "fast"
   downscale: 0.6
   min_dim: 240
