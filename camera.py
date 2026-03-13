@@ -2,7 +2,9 @@ import cv2
 import threading
 import time
 from config_loader import cfg
+from utils.logger import get_logger
 
+log = get_logger(__name__)
 
 class Camera:
     def __init__(self, index=0):  # <- change index
@@ -11,6 +13,16 @@ class Camera:
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
+
+        if self.cap.isOpened():
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            log.info(
+                "Camera opened successfully: index=%s resolution=%sx%s",
+                cam_cfg["index"],
+                width,
+                height,
+            )
 
         self.lock = threading.Lock()
         self.latest_frame = None
@@ -27,6 +39,8 @@ class Camera:
                 frame = cv2.flip(frame, cfg["camera"]["flip"])
                 with self.lock:
                     self.latest_frame = frame
+            else:
+                log.warning("Camera frame read failed")
             time.sleep(0.005)
 
     def get_frame(self):
@@ -34,5 +48,6 @@ class Camera:
             return None if self.latest_frame is None else self.latest_frame.copy()
 
     def release(self):
+        log.info("Camera release called")
         self.running = False
         self.cap.release()

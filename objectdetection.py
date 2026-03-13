@@ -4,6 +4,9 @@ import time
 import cv2
 from ultralytics import YOLO
 from config_loader import cfg
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 # Reduce Ultralytics console noise (startup banner/verbose logs).
 os.environ.setdefault("YOLO_VERBOSE", "False")
@@ -11,6 +14,7 @@ os.environ.setdefault("YOLO_VERBOSE", "False")
 # Load YOLO model ONCE
 od_cfg = cfg["object_detection"]
 model = YOLO(od_cfg["model_path"])  # nano = fast, CPU friendly
+log.info("YOLO model loaded: model_path=%s", od_cfg["model_path"])
 _model_lock = threading.Lock()
 
 
@@ -40,6 +44,11 @@ def run_object_detection(frame):
                 })
 
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        log.debug(
+            "Object detection run completed: processing_time_ms=%s detections=%s",
+            duration_ms,
+            len(detections),
+        )
 
         return {
             "detections": detections,
@@ -48,6 +57,7 @@ def run_object_detection(frame):
         }
     except Exception as exc:
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        log.error("Object detection run failed: %s", exc)
         return {
             "detections": [],
             "processing_time_ms": duration_ms,

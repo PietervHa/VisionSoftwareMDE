@@ -8,7 +8,6 @@ import time
 from config_loader import cfg
 from utils.logger import setup_logging, get_logger
 
-
 log = get_logger(__name__)
 
 def _process_vision_result(result, trigger_time):
