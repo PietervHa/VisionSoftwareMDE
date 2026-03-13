@@ -7,6 +7,7 @@ import state
 import time
 from config_loader import cfg
 from utils.logger import setup_logging, get_logger
+from output.result_writer import save_result
 
 log = get_logger(__name__)
 
@@ -39,6 +40,13 @@ def _process_vision_result(result, trigger_time):
                 state.counters["ok"] += 1
             else:
                 state.counters["nok"] += 1
+
+            latest_result = dict(state.latest_result)
+
+        try:
+            save_result(latest_result)
+        except Exception as exc:
+            log.error("Failed to write result file: %s", exc)
 
         detection_count = len(result.get("detections", []))
         log.info(
