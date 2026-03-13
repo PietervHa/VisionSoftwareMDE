@@ -6,71 +6,100 @@ from web import create_app
 import state
 import time
 from config_loader import cfg
+from utils.logger import setup_logging, get_logger
+from output.result_writer import save_result
+
+log = get_logger(__name__)
 
 def _process_vision_result(result, trigger_time):
     """Callback to handle vision results from background thread"""
-    # Calculate total cycle time from trigger to result
-    cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
+    try:
+        # Calculate total cycle time from trigger to result
+        cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
 
-    with state.lock:
-        threshold = state.confidence_threshold
+        with state.lock:
+            threshold = state.confidence_threshold
 
-    high_conf = [
-        d for d in result["detections"]
-        if d["confidence"] >= threshold
-    ]
+        high_conf = [
+            d for d in result["detections"]
+            if d["confidence"] >= threshold
+        ]
 
-    status = "OK" if high_conf else "NOK"
+        status = "OK" if high_conf else "NOK"
 
-    with state.lock:
-        state.latest_result = {
-            **result,
-            "status": status,
-            "confidence_threshold": threshold,
-            "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
-        }
+        with state.lock:
+            state.latest_result = {
+                **result,
+                "status": status,
+                "confidence_threshold": threshold,
+                "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
+            }
 
-        state.counters["total"] += 1
-        if status == "OK":
-            state.counters["ok"] += 1
-        else:
-            state.counters["nok"] += 1
+            state.counters["total"] += 1
+            if status == "OK":
+                state.counters["ok"] += 1
+            else:
+                state.counters["nok"] += 1
 
-    print(f"VISION RESULT: {state.latest_result}")
+            latest_result = dict(state.latest_result)
+
+        try:
+            save_result(latest_result)
+        except Exception as exc:
+            log.error("Failed to write result file: %s", exc)
+
+        detection_count = len(result.get("detections", []))
+        log.info(
+            "VISION RESULT: status=%s cycle_time_ms=%s detections=%s",
+            status,
+            cycle_time_ms,
+            detection_count,
+        )
+    except Exception as exc:
+        log.error("Failed to process vision result: %s", exc)
 
 def vision_trigger_loop(camera):
-    print("Press 'Q' to trigger vision. Ctrl+C to exit.")
+    log.info("Press Q to trigger vision. Ctrl+C to exit.")
 
     while True:
-        keyboard.wait("q")
+        try:
+            keyboard.wait("q")
 
-        frame = camera.get_frame()
-        if frame is None:
-            print("No frame available")
-            continue
+            frame = camera.get_frame()
+            if frame is None:
+                log.warning("No frame available")
+                continue
 
-        # Track trigger time for cycle time measurement
-        trigger_time = time.perf_counter()
+            # Track trigger time for cycle time measurement
+            trigger_time = time.perf_counter()
 
-        # Trigger OCR in background thread with callback
-        run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time))
-        print("Vision processing started (non-blocking)")
+            # Trigger OCR in background thread with callback
+            run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time))
+            log.debug("Vision processing started (non-blocking)")
+        except Exception as exc:
+            log.error("Vision trigger loop error: %s", exc)
 
 def main():
-    with state.lock:
-        state.confidence_threshold = float(cfg["confidence_threshold"])
+    setup_logging()
 
-    camera = Camera(0)
+    try:
+        with state.lock:
+            state.confidence_threshold = float(cfg["confidence_threshold"])
 
-    web_cfg = cfg["web"]
-    app = create_app(camera)
-    web_thread = threading.Thread(
-        target=lambda: app.run(host=web_cfg["host"], port=web_cfg["port"], threaded=True),
-        daemon=True,
-    )
-    web_thread.start()
+        camera = Camera(0)
 
-    vision_trigger_loop(camera)
+        web_cfg = cfg["web"]
+        app = create_app(camera)
+        web_thread = threading.Thread(
+            target=lambda: app.run(host=web_cfg["host"], port=web_cfg["port"], threaded=True),
+            daemon=True,
+        )
+        web_thread.start()
+
+        vision_trigger_loop(camera)
+    except Exception as exc:
+        log.error("Fatal startup/runtime error: %s", exc)
+        raise
 
 if __name__ == "__main__":
     main()

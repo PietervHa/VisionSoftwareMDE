@@ -9,8 +9,10 @@ from pathlib import Path
 
 from camera import Camera
 from config_loader import cfg
+from utils.logger import setup_logging, get_logger
 import vision
 
+log = get_logger(__name__)
 
 class OCRBenchmark:
     """
@@ -61,15 +63,18 @@ class OCRBenchmark:
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
-                print(
-                    f"  Frames {batch_start}-{batch_end}: "
-                    f"{avg_proc}ms avg OCR, {avg_cycle}ms avg cycle, "
-                    f"{total_detections} detections"
+                log.info(
+                    "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
+                    batch_start,
+                    batch_end,
+                    avg_proc,
+                    avg_cycle,
+                    total_detections,
                 )
 
     def run_benchmark(self, camera):
-        print(f"Starting OCR Benchmark ({self.duration} seconds)...")
-        print("Processing frames asynchronously (matches production behavior)...\\n")
+        log.info("Starting OCR Benchmark (%s seconds)...", self.duration)
+        log.info("Processing frames asynchronously (matches production behavior)...")
 
         self.running = True
         self.start_time = time.perf_counter()
@@ -116,7 +121,7 @@ class OCRBenchmark:
             )
 
         elapsed = time.perf_counter() - self.start_time
-        print("\\nBenchmark time elapsed. Waiting for remaining OCR threads to finish...")
+        log.info("Benchmark time elapsed. Waiting for remaining OCR threads to finish...")
 
         wait_start = time.perf_counter()
         while True:
@@ -125,13 +130,16 @@ class OCRBenchmark:
             if inflight == 0:
                 break
             if (time.perf_counter() - wait_start) >= self.flush_wait_seconds:
-                print(f"  Flush timeout reached with {inflight} in-flight job(s) still running.")
+                log.warning("Flush timeout reached with %s in-flight job(s) still running.", inflight)
                 break
             time.sleep(0.01)
 
-        print(
-            f"Benchmark complete! Triggered {self.frame_count} frames in {elapsed:.1f}s; "
-            f"completed {self.completed_count}, errors {self.error_count}.\\n"
+        log.info(
+            "Benchmark complete! Triggered %s frames in %.1fs; completed %s, errors %s.",
+            self.frame_count,
+            elapsed,
+            self.completed_count,
+            self.error_count,
         )
         return self.results
 
@@ -193,45 +201,42 @@ class OCRBenchmark:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
 
-        print(f"Results saved to: {filename}")
+        log.info("Results saved to: %s", filename)
         return filename
 
     def print_summary(self):
         stats = self.get_statistics()
         if not stats:
-            print("No results to display.")
+            log.info("No results to display.")
             return
 
-        print("\\n" + "=" * 60)
-        print("OCR BENCHMARK SUMMARY")
-        print("=" * 60)
-        print(f"Mode: {cfg['vision_mode']}")
-        print(f"Benchmark Duration: {stats['duration_seconds']} seconds")
-        print(f"Completed Frames: {stats['total_frames_completed']}")
-        print(f"Triggered Frames: {stats['total_frames_triggered']}")
-        print(f"Failed Frames: {stats['failed_frames']}")
-        print(f"FPS (Completed): {stats['frames_per_second']} frames/sec")
-        print()
-        print("CYCLE TIME (Trigger -> callback complete):")
-        print(f"  Min:    {stats['cycle_time']['min_ms']} ms")
-        print(f"  Max:    {stats['cycle_time']['max_ms']} ms")
-        print(f"  Mean:   {stats['cycle_time']['mean_ms']} ms")
-        print(f"  Median: {stats['cycle_time']['median_ms']} ms")
-        print(f"  StdDev: {stats['cycle_time']['stdev_ms']} ms")
-        print()
-        print("PROCESSING TIME (OCR inference):")
-        print(f"  Min:    {stats['processing_time']['min_ms']} ms")
-        print(f"  Max:    {stats['processing_time']['max_ms']} ms")
-        print(f"  Mean:   {stats['processing_time']['mean_ms']} ms")
-        print(f"  Median: {stats['processing_time']['median_ms']} ms")
-        print(f"  StdDev: {stats['processing_time']['stdev_ms']} ms")
-        print()
-        print("DETECTIONS:")
-        print(f"  Total:          {stats['detections']['total']}")
-        print(f"  Min per frame:  {stats['detections']['min_per_frame']}")
-        print(f"  Max per frame:  {stats['detections']['max_per_frame']}")
-        print(f"  Mean per frame: {stats['detections']['mean_per_frame']}")
-        print("=" * 60 + "\\n")
+        log.info("%s", "=" * 60)
+        log.info("OCR BENCHMARK SUMMARY")
+        log.info("%s", "=" * 60)
+        log.info("Mode: %s", cfg["vision_mode"])
+        log.info("Benchmark Duration: %s seconds", stats["duration_seconds"])
+        log.info("Completed Frames: %s", stats["total_frames_completed"])
+        log.info("Triggered Frames: %s", stats["total_frames_triggered"])
+        log.info("Failed Frames: %s", stats["failed_frames"])
+        log.info("FPS (Completed): %s frames/sec", stats["frames_per_second"])
+        log.info("CYCLE TIME (Trigger -> callback complete):")
+        log.info("  Min:    %s ms", stats["cycle_time"]["min_ms"])
+        log.info("  Max:    %s ms", stats["cycle_time"]["max_ms"])
+        log.info("  Mean:   %s ms", stats["cycle_time"]["mean_ms"])
+        log.info("  Median: %s ms", stats["cycle_time"]["median_ms"])
+        log.info("  StdDev: %s ms", stats["cycle_time"]["stdev_ms"])
+        log.info("PROCESSING TIME (OCR inference):")
+        log.info("  Min:    %s ms", stats["processing_time"]["min_ms"])
+        log.info("  Max:    %s ms", stats["processing_time"]["max_ms"])
+        log.info("  Mean:   %s ms", stats["processing_time"]["mean_ms"])
+        log.info("  Median: %s ms", stats["processing_time"]["median_ms"])
+        log.info("  StdDev: %s ms", stats["processing_time"]["stdev_ms"])
+        log.info("DETECTIONS:")
+        log.info("  Total:          %s", stats["detections"]["total"])
+        log.info("  Min per frame:  %s", stats["detections"]["min_per_frame"])
+        log.info("  Max per frame:  %s", stats["detections"]["max_per_frame"])
+        log.info("  Mean per frame: %s", stats["detections"]["mean_per_frame"])
+        log.info("%s", "=" * 60)
 
 
 def parse_args():
@@ -258,10 +263,11 @@ def parse_args():
 
 
 def main():
+    setup_logging()
     args = parse_args()
 
     if cfg["vision_mode"] != "ocr":
-        print(
+        log.error(
             f"Config vision_mode is '{cfg['vision_mode']}'. "
             "Set vision_mode to 'ocr' in config before running this benchmark."
         )
@@ -279,7 +285,7 @@ def main():
         benchmark.print_summary()
         benchmark.save_results(args.output_dir)
     except KeyboardInterrupt:
-        print("\\nBenchmark interrupted by user.")
+        log.warning("Benchmark interrupted by user.")
         benchmark.print_summary()
         benchmark.save_results(args.output_dir)
     finally:

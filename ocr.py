@@ -5,6 +5,9 @@ import time
 import easyocr
 import numpy as np
 from config_loader import cfg
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 pytesseract.pytesseract.tesseract_cmd = cfg["ocr"]["tesseract_path"]
 
@@ -27,6 +30,11 @@ class OCR:
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
         self.min_dim = int(ocr_cfg["min_dim"])
+        log.debug(
+            "OCR init: preprocess_mode=%s downscale=%s",
+            self.preprocess_mode,
+            self.downscale,
+        )
 
     def _preprocess_image(self, gray):
         """Enhance image contrast and clarity for faster OCR"""
@@ -93,11 +101,16 @@ class OCR:
         if self.debug_draw_roi:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        return frame[y1:y2, x1:x2]
+        cropped = frame[y1:y2, x1:x2]
+        if cropped is None or cropped.size == 0:
+            log.warning("ROI crop resulted in an empty or invalid frame")
+        return cropped
 
     """
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
+        if roi_frame is None or roi_frame.size == 0:
+            log.warning("ROI crop resulted in an empty or invalid frame")
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
 
         start_time = time.perf_counter()
@@ -171,9 +184,11 @@ class OCR:
             })
 
         # Return detections and processing time
+        processing_time_ms = round(elapsed_ms, 1)
+        log.debug("OCR run completed: processing_time_ms=%s", processing_time_ms)
         return {
             "detections": detections,
-            "processing_time_ms": round(elapsed_ms, 1),
+            "processing_time_ms": processing_time_ms,
             "mode": "ocr"
         }
 
