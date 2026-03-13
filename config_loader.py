@@ -1,8 +1,11 @@
 import sys
 import argparse
+import logging
 from pathlib import Path
 
 import yaml
+
+log = logging.getLogger(__name__)
 
 """
 Configuration loader for the machine vision application.
@@ -25,7 +28,7 @@ def _load_config():
 
     # Check if file exists
     if not config_path.exists():
-        print(f"Error: Configuration file not found: {config_path}", file=sys.stderr)
+        log.error("Configuration file not found: %s", config_path)
         sys.exit(1)
 
     # Load YAML
@@ -36,10 +39,10 @@ def _load_config():
             config = {}
         return config
     except yaml.YAMLError as e:
-        print(f"Error: Failed to parse YAML file {config_path}: {e}", file=sys.stderr)
+        log.error("Failed to parse YAML file %s: %s", config_path, e)
         sys.exit(1)
     except Exception as e:
-        print(f"Error: Failed to load config file {config_path}: {e}", file=sys.stderr)
+        log.error("Failed to load config file %s: %s", config_path, e)
         sys.exit(1)
 
 
