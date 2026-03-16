@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import statistics
+import sys
 import threading
 import time
 from datetime import datetime
@@ -266,11 +267,9 @@ def main():
     args = parse_args()
 
     if cfg["vision_mode"] != "object_detection":
-        log.error(
-            f"Config vision_mode is '{cfg['vision_mode']}'. "
-            "Set vision_mode to 'object_detection' in config before running this benchmark."
-        )
-        return
+        print("WARNING: config vision_mode is not 'object_detection'.")
+        print("Set vision_mode: object_detection in config/default.yaml to benchmark OD.")
+        sys.exit(1)
 
     camera = Camera(0)
     benchmark = ObjectDetectionBenchmark(

@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import statistics
+import sys
 import threading
 import time
 from datetime import datetime
@@ -267,11 +268,9 @@ def main():
     args = parse_args()
 
     if cfg["vision_mode"] != "ocr":
-        log.error(
-            f"Config vision_mode is '{cfg['vision_mode']}'. "
-            "Set vision_mode to 'ocr' in config before running this benchmark."
-        )
-        return
+        print("WARNING: config vision_mode is not 'ocr'.")
+        print("Set vision_mode: ocr in config/default.yaml to benchmark OCR.")
+        sys.exit(1)
 
     camera = Camera(0)
     benchmark = OCRBenchmark(
