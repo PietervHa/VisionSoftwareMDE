@@ -17,8 +17,7 @@ def _process_vision_result(result, trigger_time, app_state):
         # Calculate total cycle time from trigger to result
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
 
-        with app_state.lock:
-            threshold = app_state.confidence_threshold
+        threshold = app_state.get_threshold()
 
         high_conf = [
             d for d in result["detections"]
@@ -27,24 +26,17 @@ def _process_vision_result(result, trigger_time, app_state):
 
         status = "OK" if high_conf else "NOK"
 
-        with app_state.lock:
-            app_state.latest_result = {
-                **result,
-                "status": status,
-                "confidence_threshold": threshold,
-                "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
-            }
-
-            app_state.counters["total"] += 1
-            if status == "OK":
-                app_state.counters["ok"] += 1
-            else:
-                app_state.counters["nok"] += 1
-
-            latest_result = dict(app_state.latest_result)
+        result_dict = {
+            **result,
+            "status": status,
+            "confidence_threshold": threshold,
+            "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
+        }
+        app_state.update_result(result_dict)
+        app_state.increment_counter(status)
 
         try:
-            save_result(latest_result)
+            save_result(result_dict)
         except Exception as exc:
             log.error("Failed to write result file: %s", exc)
 
