@@ -54,6 +54,7 @@ class OCRBenchmark:
             self.completed_count += 1
             if error_message:
                 self.error_count += 1
+                log.error("Frame %s OCR error: %s", frame_num, error_message)
             self._inflight = max(0, self._inflight - 1)
 
             completed_frames = self.completed_count
@@ -64,7 +65,7 @@ class OCRBenchmark:
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
-                log.info(
+                log.debug(
                     "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
                     batch_start,
                     batch_end,
