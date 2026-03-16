@@ -1,11 +1,10 @@
 import cv2
 from flask import Flask, Response, send_file
 from flask_cors import CORS
-import state
 from flask import jsonify, request
 from config_loader import cfg
 
-def create_app(camera):
+def create_app(camera, app_state):
     app = Flask(__name__)
     CORS(app)
 
@@ -90,29 +89,19 @@ def create_app(camera):
 
     @app.route("/result")
     def get_result():
-        with state.lock:
-            return jsonify({
-                "result": state.latest_result,
-                "counters": state.counters
-            })
+        return jsonify(app_state.get_snapshot())
 
     @app.route("/threshold")
     def get_threshold():
-        with state.lock:
-            return jsonify({"threshold": state.confidence_threshold})
+        return jsonify({"threshold": app_state.get_threshold()})
 
     @app.route("/threshold", methods=["POST"])
     def set_threshold():
         data = request.json
         new_value = float(data.get("threshold", 0.5))
 
-        # Clamp between 0 and 1
-        new_value = max(0.0, min(1.0, new_value))
-
-        with state.lock:
-            state.confidence_threshold = new_value
-
-        return jsonify({"threshold": new_value})
+        app_state.set_threshold(new_value)
+        return jsonify({"threshold": app_state.get_threshold()})
 
     @app.route("/video_feed")
     def video_feed():
@@ -123,12 +112,7 @@ def create_app(camera):
 
     @app.route("/reset_counters", methods=["POST"])
     def reset_counters():
-        with state.lock:
-            state.counters = {
-                "ok": 0,
-                "nok": 0,
-                "total": 0
-            }
+        app_state.reset_counters()
         return jsonify({"status": "counters reset"})
 
     return app
