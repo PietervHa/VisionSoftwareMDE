@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import statistics
+import sys
 import threading
 import time
 from datetime import datetime
@@ -20,7 +21,7 @@ class OCRBenchmark:
     Uses the same async callback pattern as main.py.
     """
 
-    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=2):
+    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=4):
         self.duration = duration_seconds
         self.flush_wait_seconds = flush_wait_seconds
         self.max_inflight = max_inflight
@@ -53,17 +54,18 @@ class OCRBenchmark:
             self.completed_count += 1
             if error_message:
                 self.error_count += 1
+                log.error("Frame %s OCR error: %s", frame_num, error_message)
             self._inflight = max(0, self._inflight - 1)
 
             completed_frames = self.completed_count
             if completed_frames % 10 == 0:
                 last_10 = self.results[-10:]
-                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / 10)
-                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / 10)
+                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / len(last_10))
+                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / len(last_10))
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
-                log.info(
+                log.debug(
                     "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
                     batch_start,
                     batch_end,
@@ -256,7 +258,7 @@ def parse_args():
     parser.add_argument(
         "--max-inflight",
         type=int,
-        default=2,
+        default=4,
         help="Maximum in-flight async OCR jobs",
     )
     return parser.parse_args()
@@ -267,11 +269,9 @@ def main():
     args = parse_args()
 
     if cfg["vision_mode"] != "ocr":
-        log.error(
-            f"Config vision_mode is '{cfg['vision_mode']}'. "
-            "Set vision_mode to 'ocr' in config before running this benchmark."
-        )
-        return
+        print("WARNING: config vision_mode is not 'ocr'.")
+        print("Set vision_mode: ocr in config/default.yaml to benchmark OCR.")
+        sys.exit(1)
 
     camera = Camera(0)
     benchmark = OCRBenchmark(

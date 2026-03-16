@@ -2,7 +2,7 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection"
+vision_mode: "object_detection"  # valid values: "ocr" (default, backward compatible), "object_detection"
 machine_id: "default"
 confidence_threshold: 0.8
 

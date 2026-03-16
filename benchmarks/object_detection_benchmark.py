@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import statistics
+import sys
 import threading
 import time
 from datetime import datetime
@@ -52,6 +53,7 @@ class ObjectDetectionBenchmark:
             self.completed_count += 1
             if error_message:
                 self.error_count += 1
+                log.error("Frame %s object-detection error: %s", frame_num, error_message)
             self._inflight = max(0, self._inflight - 1)
 
             completed_frames = self.completed_count
@@ -62,7 +64,7 @@ class ObjectDetectionBenchmark:
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
-                log.info(
+                log.debug(
                     "Frames %s-%s: %sms avg OD, %sms avg cycle, %s detections",
                     batch_start,
                     batch_end,
@@ -266,11 +268,9 @@ def main():
     args = parse_args()
 
     if cfg["vision_mode"] != "object_detection":
-        log.error(
-            f"Config vision_mode is '{cfg['vision_mode']}'. "
-            "Set vision_mode to 'object_detection' in config before running this benchmark."
-        )
-        return
+        print("WARNING: config vision_mode is not 'object_detection'.")
+        print("Set vision_mode: object_detection in config/default.yaml to benchmark OD.")
+        sys.exit(1)
 
     camera = Camera(0)
     benchmark = ObjectDetectionBenchmark(
