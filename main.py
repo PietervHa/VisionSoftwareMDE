@@ -3,7 +3,7 @@ import keyboard
 from camera import Camera
 from vision import run_vision
 from web import create_app
-import state
+from state import AppState
 import time
 from config_loader import cfg
 from utils.logger import setup_logging, get_logger
@@ -11,14 +11,14 @@ from output.result_writer import save_result
 
 log = get_logger(__name__)
 
-def _process_vision_result(result, trigger_time):
+def _process_vision_result(result, trigger_time, app_state):
     """Callback to handle vision results from background thread"""
     try:
         # Calculate total cycle time from trigger to result
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
 
-        with state.lock:
-            threshold = state.confidence_threshold
+        with app_state.lock:
+            threshold = app_state.confidence_threshold
 
         high_conf = [
             d for d in result["detections"]
@@ -27,21 +27,21 @@ def _process_vision_result(result, trigger_time):
 
         status = "OK" if high_conf else "NOK"
 
-        with state.lock:
-            state.latest_result = {
+        with app_state.lock:
+            app_state.latest_result = {
                 **result,
                 "status": status,
                 "confidence_threshold": threshold,
                 "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
             }
 
-            state.counters["total"] += 1
+            app_state.counters["total"] += 1
             if status == "OK":
-                state.counters["ok"] += 1
+                app_state.counters["ok"] += 1
             else:
-                state.counters["nok"] += 1
+                app_state.counters["nok"] += 1
 
-            latest_result = dict(state.latest_result)
+            latest_result = dict(app_state.latest_result)
 
         try:
             save_result(latest_result)
@@ -58,7 +58,7 @@ def _process_vision_result(result, trigger_time):
     except Exception as exc:
         log.error("Failed to process vision result: %s", exc)
 
-def vision_trigger_loop(camera):
+def vision_trigger_loop(camera, app_state):
     log.info("Press Q to trigger vision. Ctrl+C to exit.")
 
     while True:
@@ -74,29 +74,27 @@ def vision_trigger_loop(camera):
             trigger_time = time.perf_counter()
 
             # Trigger OCR in background thread with callback
-            run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time))
+            run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time, app_state))
             log.debug("Vision processing started (non-blocking)")
         except Exception as exc:
             log.error("Vision trigger loop error: %s", exc)
 
 def main():
     setup_logging()
+    app_state = AppState()
 
     try:
-        with state.lock:
-            state.confidence_threshold = float(cfg["confidence_threshold"])
-
         camera = Camera(0)
 
         web_cfg = cfg["web"]
-        app = create_app(camera)
+        app = create_app(camera, app_state)
         web_thread = threading.Thread(
             target=lambda: app.run(host=web_cfg["host"], port=web_cfg["port"], threaded=True),
             daemon=True,
         )
         web_thread.start()
 
-        vision_trigger_loop(camera)
+        vision_trigger_loop(camera, app_state)
     except Exception as exc:
         log.error("Fatal startup/runtime error: %s", exc)
         raise
