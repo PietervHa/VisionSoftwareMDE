@@ -12,6 +12,17 @@
     <!-- CAMERA -->
     <div class="camera">
         <img src="/video_feed">
+        <div id="below-feed" class="below-feed">
+            <div id="visionModeToggle" class="vision-toggle">
+                <span>Vision Mode:</span>
+                <button id="modeOcrBtn" class="mode-btn active">OCR</button>
+                <button id="modeObjBtn" class="mode-btn">Object Detection</button>
+            </div>
+            <div id="dynamicLabel" class="dynamic-label">-</div>
+            <div id="cycleTimeSection" class="cycle-time" style="display:none;">
+                Processing Time: <span id="time">0 ms</span>
+            </div>
+        </div>
         <div id="modeBanner" class="mode-overlay maintenance">
             MAINTENANCE MODE
         </div>
@@ -27,11 +38,6 @@
         <div class="info-box">
             <h2>Detections</h2>
             <div id="detections" class="detections">None</div>
-        </div>
-
-        <div class="info-box">
-            <h2>Processing Time</h2>
-            <div id="time">0 ms</div>
         </div>
 
         <div class="info-box">
