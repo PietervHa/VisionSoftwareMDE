@@ -82,7 +82,8 @@ def create_app(camera, app_state):
     @app.route("/status")
     def get_status():
         return jsonify({
-            "vision_mode": cfg["vision_mode"],
+            "vision_mode": app_state.get_vision_mode(),
+            "maintenance_mode": app_state.get_maintenance_mode(),
             "machine_id": cfg["machine_id"],
             "version": "1.0.0"
         })
@@ -97,11 +98,29 @@ def create_app(camera, app_state):
 
     @app.route("/threshold", methods=["POST"])
     def set_threshold():
-        data = request.json
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+
+        data = request.json or {}
         new_value = float(data.get("threshold", 0.5))
 
         app_state.set_threshold(new_value)
         return jsonify({"threshold": app_state.get_threshold()})
+
+    @app.route("/maintenance_mode", methods=["POST"])
+    def set_maintenance_mode():
+        data = request.json or {}
+        app_state.set_maintenance_mode(data.get("maintenance_mode", False))
+        return jsonify({"maintenance_mode": app_state.get_maintenance_mode()})
+
+    @app.route("/vision_mode", methods=["POST"])
+    def set_vision_mode():
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+
+        data = request.json or {}
+        app_state.set_vision_mode(data.get("vision_mode", ""))
+        return jsonify({"vision_mode": app_state.get_vision_mode()})
 
     @app.route("/video_feed")
     def video_feed():
