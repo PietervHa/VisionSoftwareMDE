@@ -1,35 +1,53 @@
+from objectdetection import run_object_detection
+from ocr import OCR
+import threading
 import time
-import cv2
-from ultralytics import YOLO
+from config_loader import cfg
 
-# Load YOLO model ONCE
-model = YOLO("yolov8n.pt")  # nano = fast, CPU friendly
+# Backward-compatible alias; primary source is cfg["vision_mode"].
+VISION_MODE = cfg["vision_mode"]
 
-def run_vision(frame):
-    start = time.time()
+ocr_instance = OCR()
 
-    # Optional: resize for speed (recommended)
-    frame_resized = cv2.resize(frame, (640, 640))
 
-    # Run YOLO inference
-    results = model(frame_resized, verbose=False)
+def _run_with_callback(fn, frame, callback):
+    # Keep vision trigger loop non-blocking by running inference in a daemon worker.
+    def worker():
+        start = time.perf_counter()
+        try:
+            result = fn(frame)
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            result = {
+                "detections": [],
+                "processing_time_ms": duration_ms,
+                "mode": cfg["vision_mode"],
+                "error": str(exc),
+            }
+        callback(result)
 
-    detections = []
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
 
-    for r in results:
-        for box in r.boxes:
-            class_id = int(box.cls[0])
-            confidence = float(box.conf[0])
-            label = model.names[class_id]
 
-            detections.append({
-                "label": label,
-                "confidence": round(confidence, 3)
-            })
+def run_vision(frame, callback=None):
+    """
+    Dispatcher function that routes to OCR or object detection
+    based on VISION_MODE configuration.
 
-    duration_ms = int((time.time() - start) * 1000)
+    If callback is provided, runs selected vision mode in a background thread.
+    Otherwise, runs synchronously.
+    """
+    if cfg["vision_mode"] == "ocr":
+        if callback:
+            _run_with_callback(ocr_instance.run, frame, callback)
+            return None
+        return ocr_instance.run(frame)
 
-    return {
-        "detections": detections,
-        "processing_time_ms": duration_ms
-    }
+    if cfg["vision_mode"] == "object_detection":
+        if callback:
+            _run_with_callback(run_object_detection, frame, callback)
+            return None
+        return run_object_detection(frame)
+
+    raise ValueError(f"Unknown VISION_MODE: {cfg['vision_mode']}")

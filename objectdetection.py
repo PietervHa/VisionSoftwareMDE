@@ -1,0 +1,66 @@
+import os
+import threading
+import time
+import cv2
+from ultralytics import YOLO
+from config_loader import cfg
+from utils.logger import get_logger
+
+log = get_logger(__name__)
+
+# Reduce Ultralytics console noise (startup banner/verbose logs).
+os.environ.setdefault("YOLO_VERBOSE", "False")
+
+# Load YOLO model ONCE
+od_cfg = cfg["object_detection"]
+model = YOLO(od_cfg["model_path"])  # nano = fast, CPU friendly
+log.info("YOLO model loaded: model_path=%s", od_cfg["model_path"])
+_model_lock = threading.Lock()
+
+
+def run_object_detection(frame):
+    start = time.perf_counter()
+
+    try:
+        # Optional: resize for speed (recommended)
+        inference_size = od_cfg["inference_size"]
+        frame_resized = cv2.resize(frame, (inference_size, inference_size))
+
+        # Run YOLO inference (guard shared model access across threads)
+        with _model_lock:
+            results = model(frame_resized, verbose=False)
+
+        detections = []
+
+        for r in results:
+            for box in r.boxes:
+                class_id = int(box.cls[0])
+                confidence = float(box.conf[0])
+                label = model.names[class_id]
+
+                detections.append({
+                    "label": label,
+                    "confidence": round(confidence, 3)
+                })
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        log.debug(
+            "Object detection run completed: processing_time_ms=%s detections=%s",
+            duration_ms,
+            len(detections),
+        )
+
+        return {
+            "detections": detections,
+            "processing_time_ms": duration_ms,
+            "mode": "object_detection"
+        }
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        log.error("Object detection run failed: %s", exc)
+        return {
+            "detections": [],
+            "processing_time_ms": duration_ms,
+            "mode": "object_detection",
+            "error": str(exc)
+        }
