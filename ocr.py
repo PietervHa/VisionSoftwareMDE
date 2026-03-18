@@ -13,7 +13,8 @@ pytesseract.pytesseract.tesseract_cmd = cfg["ocr"]["tesseract_path"]
 
 
 class OCR:
-    def __init__(self):
+    def __init__(self, app_state=None):
+        self.app_state = app_state
         self.languages = "eng"  # Only English for speed
         ocr_cfg = cfg["ocr"]
         psm = ocr_cfg["psm"]
@@ -147,6 +148,10 @@ class OCR:
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
+        keywords = (
+            [self.app_state.get_ocr_keyword()]
+            if self.app_state else self.keywords
+        )
 
         gray = self._downscale_roi(gray)
 
@@ -174,7 +179,7 @@ class OCR:
             word = text.lower()
 
             # Filter by keywords/regex if defined
-            if self.keywords and word not in self.keywords:
+            if keywords and word not in keywords:
                 if self.date_regex and not re.search(self.date_regex, text):
                     continue
 
@@ -189,7 +194,8 @@ class OCR:
         return {
             "detections": detections,
             "processing_time_ms": processing_time_ms,
-            "mode": "ocr"
+            "mode": "ocr",
+            "searched_word": keywords[0] if keywords else ""
         }
 
 

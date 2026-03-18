@@ -122,6 +122,21 @@ def create_app(camera, app_state):
         app_state.set_vision_mode(data.get("vision_mode", ""))
         return jsonify({"vision_mode": app_state.get_vision_mode()})
 
+    @app.route("/ocr_keyword")
+    def get_ocr_keyword():
+        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+
+    @app.route("/ocr_keyword", methods=["POST"])
+    def set_ocr_keyword():
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+        data = request.json or {}
+        new_keyword = data.get("ocr_keyword", "").strip()
+        if not new_keyword:
+            return jsonify({"error": "ocr_keyword cannot be empty"}), 400
+        app_state.set_ocr_keyword(new_keyword)
+        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+
     @app.route("/video_feed")
     def video_feed():
         return Response(
