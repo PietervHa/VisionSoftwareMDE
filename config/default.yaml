@@ -33,7 +33,7 @@ camera:
   index: 0
   width: 1280
   height: 1024
-  flip: 2
+  flip: -1
 
 # Object detection settings
 object_detection:

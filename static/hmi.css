@@ -141,3 +141,67 @@ body {
     color: #777;
     text-align: center;
 }
+
+.below-feed {
+    background: #1a1a1a;
+    border-top: 1px solid #333;
+    padding: 10px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vision-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    color: #aaa;
+}
+
+.mode-btn {
+    padding: 5px 14px;
+    font-size: 14px;
+    background: #333;
+    color: #bbb;
+    border: 1px solid #555;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.mode-btn.active {
+    background: #3b5b8a;
+    color: #fff;
+    border-color: #3b5b8a;
+}
+
+.dynamic-label {
+    font-size: 17px;
+    color: #ddd;
+    min-height: 22px;
+}
+
+.cycle-time {
+    font-size: 14px;
+    color: #888;
+}
+
+.camera {
+    flex-direction: column;   /* Change existing rule: add this to stack img and below-feed */
+    justify-content: flex-start;
+    align-items: stretch;
+}
+
+/* override: keep img centered and filling the camera area */
+.camera img {
+    flex: 1;
+    object-fit: contain;
+    width: 100%;
+}
+
+/* Slightly reduce live-feed height so the full HMI fits without page scrolling. */
+.camera img {
+    max-height: 85vh;
+    min-height: 0;
+}
+
