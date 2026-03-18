@@ -17,6 +17,7 @@ class AppState:
         self.confidence_threshold = 0.0
         self.maintenance_mode = True
         self.vision_mode = cfg["vision_mode"]
+        self.ocr_keyword = cfg["ocr"]["keywords"][0] if cfg["ocr"]["keywords"] else ""
         self.set_threshold(float(cfg["confidence_threshold"]))
 
     def update_result(self, result: dict):
@@ -46,6 +47,7 @@ class AppState:
                 "counters": dict(self.counters),
                 "maintenance_mode": self.maintenance_mode,
                 "vision_mode": self.vision_mode,
+                "ocr_keyword": self.ocr_keyword,
             }
 
     def get_threshold(self) -> float:
@@ -72,3 +74,11 @@ class AppState:
         with self.lock:
             if value in ("ocr", "object_detection"):
                 self.vision_mode = value
+
+    def get_ocr_keyword(self) -> str:
+        with self.lock:
+            return self.ocr_keyword
+
+    def set_ocr_keyword(self, value: str):
+        with self.lock:
+            self.ocr_keyword = value.strip().lower()
