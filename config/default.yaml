@@ -24,7 +24,7 @@ ocr:
   min_dim: 240
   psm: 7
   oem: 3
-  whitelist: "abcdefghijklmnopqrstuvwxyz0123456789."
+  whitelist: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789."
   disable_dawgs: true
   tesseract_path: "C:/Program Files/Tesseract-OCR/tesseract.exe"
 

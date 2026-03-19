@@ -9,6 +9,9 @@ VISION_MODE = cfg["vision_mode"]
 
 ocr_instance = OCR()
 
+def bind_app_state(app_state):
+    global ocr_instance
+    ocr_instance = OCR(app_state=app_state)
 
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
