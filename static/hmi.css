@@ -201,7 +201,35 @@ body {
 
 /* Slightly reduce live-feed height so the full HMI fits without page scrolling. */
 .camera img {
-    max-height: 85vh;
+    max-height: 80vh;
     min-height: 0;
+}
+
+.ocr-keyword-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: #aaa;
+}
+
+.ocr-keyword-row input {
+    font-size: 14px;
+    padding: 4px 8px;
+    background: #2a2a2a;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 5px;
+    width: 240px;
+}
+
+.ocr-keyword-row button {
+    padding: 5px 12px;
+    font-size: 13px;
+    background: #444;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 5px;
+    cursor: pointer;
 }
 

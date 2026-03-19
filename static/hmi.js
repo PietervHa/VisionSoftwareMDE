@@ -104,6 +104,12 @@ async function loadThreshold() {
     }
 }
 
+async function loadOcrKeyword() {
+    const res = await fetch("/ocr_keyword");
+    const data = await res.json();
+    document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
+}
+
 document.getElementById("applyThreshold").addEventListener("click", async () => {
     if (CURRENT_MODE !== "maintenance") return;
 
@@ -134,9 +140,11 @@ function applyMode() {
     const banner = document.getElementById("modeBanner");
     const input = document.getElementById("thresholdInput");
     const applyBtn = document.getElementById("applyThreshold");
+    const ocrApplyBtn = document.getElementById("applyOcrKeyword");
     const prodBtn = document.getElementById("startProductionBtn");
     const maintBtn = document.getElementById("startMaintenanceBtn");
     const visionModeToggle = document.getElementById("visionModeToggle");
+    const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
     const previousMode = LAST_APPLIED_MODE;
 
@@ -146,6 +154,7 @@ function applyMode() {
 
         input.disabled = false;
         applyBtn.disabled = false;
+        if (ocrApplyBtn) ocrApplyBtn.disabled = false;
         prodBtn.style.display = "inline-block";
         maintBtn.style.display = "none";
 
@@ -167,6 +176,7 @@ function applyMode() {
 
         input.disabled = true;
         applyBtn.disabled = true;
+        if (ocrApplyBtn) ocrApplyBtn.disabled = true;
         prodBtn.style.display = "none";
         maintBtn.style.display = "inline-block";
 
@@ -183,6 +193,12 @@ function applyMode() {
     }
 
     LAST_APPLIED_MODE = CURRENT_MODE;
+
+    if (ocrKeywordSection) {
+        ocrKeywordSection.style.display = (CURRENT_MODE === "maintenance" && VISION_MODE === "ocr")
+            ? "flex"
+            : "none";
+    }
 
     if (previousMode !== null && previousMode !== CURRENT_MODE) {
         syncModeToBackend();
@@ -209,6 +225,13 @@ async function syncModeToBackend() {
 async function applyVisionMode(mode) {
     VISION_MODE = mode;
     updateVisionModeButtons();
+
+    const ocrKeywordSection = document.getElementById("ocrKeywordSection");
+    if (ocrKeywordSection) {
+        ocrKeywordSection.style.display = (CURRENT_MODE === "maintenance" && VISION_MODE === "ocr")
+            ? "flex"
+            : "none";
+    }
 
     try {
         await fetch("/vision_mode", {
@@ -255,6 +278,17 @@ document.getElementById("modeObjBtn").addEventListener("click", () => {
     applyVisionMode("object_detection");
 });
 
+document.getElementById("applyOcrKeyword").addEventListener("click", async () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    const value = document.getElementById("ocrKeywordInput").value.trim();
+    if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
+    await fetch("/ocr_keyword", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ocr_keyword: value })
+    });
+});
+
 document.getElementById("resetBtn").addEventListener("click", async () => {
     if (!confirm("Are you sure you want to reset the counters?")) return;
     await fetch("/reset_counters", { method: "POST" });
@@ -268,6 +302,7 @@ async function init() {
         // Resolve mode first so all downstream behavior is mode-aware.
         await loadStatus();
         await loadThreshold();
+        await loadOcrKeyword();
         applyMode();
         startResultPolling();
     } catch (e) {
