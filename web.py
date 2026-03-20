@@ -122,6 +122,13 @@ def create_app(camera, app_state):
         app_state.set_vision_mode(data.get("vision_mode", ""))
         return jsonify({"vision_mode": app_state.get_vision_mode()})
 
+    @app.route("/camera_rotation", methods=["POST"])
+    def rotate_camera():
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+        app_state.rotate_camera()
+        return jsonify({"camera_rotation": app_state.get_camera_rotation()})
+
     @app.route("/ocr_keyword")
     def get_ocr_keyword():
         return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})

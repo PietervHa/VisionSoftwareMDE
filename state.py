@@ -16,6 +16,7 @@ class AppState:
         }
         self.confidence_threshold = 0.0
         self.maintenance_mode = True
+        self.camera_rotation = 0  # steps: 0, 1, 2, 3 (each = 90° clockwise)
         self.vision_mode = cfg["vision_mode"]
         self.ocr_keyword = cfg["ocr"]["keywords"][0] if cfg["ocr"]["keywords"] else ""
         self.set_threshold(float(cfg["confidence_threshold"]))
@@ -65,6 +66,14 @@ class AppState:
     def set_maintenance_mode(self, value: bool):
         with self.lock:
             self.maintenance_mode = bool(value)
+
+    def get_camera_rotation(self) -> int:
+        with self.lock:
+            return self.camera_rotation
+
+    def rotate_camera(self):
+        with self.lock:
+            self.camera_rotation = (self.camera_rotation + 1) % 4
 
     def get_vision_mode(self) -> str:
         with self.lock:
