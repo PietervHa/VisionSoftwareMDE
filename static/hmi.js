@@ -252,7 +252,6 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
 
     CURRENT_MODE = "production";
     applyMode();
-    syncModeToBackend();
 });
 
 document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
@@ -265,7 +264,6 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
 
     CURRENT_MODE = "maintenance";
     applyMode();
-    syncModeToBackend();
 });
 
 document.getElementById("modeOcrBtn").addEventListener("click", () => {
