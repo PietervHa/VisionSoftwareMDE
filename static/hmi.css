@@ -233,3 +233,16 @@ body {
     cursor: pointer;
 }
 
+.rotate-btn {
+    margin-left: 12px;
+    background: #2a2a2a;
+    border-color: #666;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+}
+
+.rotate-btn:hover {
+    background: #3a3a3a;
+    border-color: #999;
+}
+

@@ -146,7 +146,12 @@ function applyMode() {
     const visionModeToggle = document.getElementById("visionModeToggle");
     const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
+    const rotateBtn = document.getElementById("rotateCameraBtn");
     const previousMode = LAST_APPLIED_MODE;
+
+    if (rotateBtn) {
+        rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
+    }
 
     if (CURRENT_MODE === "maintenance") {
         banner.textContent = "MAINTENANCE MODE";
@@ -274,6 +279,15 @@ document.getElementById("modeOcrBtn").addEventListener("click", () => {
 document.getElementById("modeObjBtn").addEventListener("click", () => {
     if (CURRENT_MODE !== "maintenance") return;
     applyVisionMode("object_detection");
+});
+
+document.getElementById("rotateCameraBtn").addEventListener("click", async () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    await fetch("/camera_rotation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+    });
 });
 
 document.getElementById("applyOcrKeyword").addEventListener("click", async () => {
