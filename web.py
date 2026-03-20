@@ -64,7 +64,7 @@ def create_app(camera, app_state):
                 continue
 
             frame_for_stream = frame
-            if cfg["hmi"]["debug_draw_roi"]:
+            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr":
                 frame_for_stream = _draw_roi(frame.copy())
 
             _, buffer = cv2.imencode(".jpg", frame_for_stream)
