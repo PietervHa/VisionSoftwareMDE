@@ -64,7 +64,7 @@ def create_app(camera, app_state):
                 continue
 
             frame_for_stream = frame
-            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr":
+            if cfg["hmi"]["debug_draw_roi"]:
                 frame_for_stream = _draw_roi(frame.copy())
 
             _, buffer = cv2.imencode(".jpg", frame_for_stream)
@@ -82,8 +82,7 @@ def create_app(camera, app_state):
     @app.route("/status")
     def get_status():
         return jsonify({
-            "vision_mode": app_state.get_vision_mode(),
-            "maintenance_mode": app_state.get_maintenance_mode(),
+            "vision_mode": cfg["vision_mode"],
             "machine_id": cfg["machine_id"],
             "version": "1.0.0"
         })
@@ -98,51 +97,11 @@ def create_app(camera, app_state):
 
     @app.route("/threshold", methods=["POST"])
     def set_threshold():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-
-        data = request.json or {}
+        data = request.json
         new_value = float(data.get("threshold", 0.5))
 
         app_state.set_threshold(new_value)
         return jsonify({"threshold": app_state.get_threshold()})
-
-    @app.route("/maintenance_mode", methods=["POST"])
-    def set_maintenance_mode():
-        data = request.json or {}
-        app_state.set_maintenance_mode(data.get("maintenance_mode", False))
-        return jsonify({"maintenance_mode": app_state.get_maintenance_mode()})
-
-    @app.route("/vision_mode", methods=["POST"])
-    def set_vision_mode():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-
-        data = request.json or {}
-        app_state.set_vision_mode(data.get("vision_mode", ""))
-        return jsonify({"vision_mode": app_state.get_vision_mode()})
-
-    @app.route("/camera_rotation", methods=["POST"])
-    def rotate_camera():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        app_state.rotate_camera()
-        return jsonify({"camera_rotation": app_state.get_camera_rotation()})
-
-    @app.route("/ocr_keyword")
-    def get_ocr_keyword():
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
-
-    @app.route("/ocr_keyword", methods=["POST"])
-    def set_ocr_keyword():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        new_keyword = data.get("ocr_keyword", "").strip()
-        if not new_keyword:
-            return jsonify({"error": "ocr_keyword cannot be empty"}), 400
-        app_state.set_ocr_keyword(new_keyword)
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
 
     @app.route("/video_feed")
     def video_feed():

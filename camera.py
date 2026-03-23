@@ -7,9 +7,8 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class Camera:
-    def __init__(self, index=0, app_state=None):  # <- change index
+    def __init__(self, index=0):  # <- change index
         cam_cfg = cfg["camera"]
-        self.app_state = app_state
         self.cap = cv2.VideoCapture(cam_cfg["index"], cv2.CAP_DSHOW)
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
@@ -38,14 +37,6 @@ class Camera:
             if ret:
                 # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
                 frame = cv2.flip(frame, cfg["camera"]["flip"])
-                rotation = self.app_state.get_camera_rotation() if self.app_state else 0
-                if rotation == 1:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                elif rotation == 2:
-                    frame = cv2.rotate(frame, cv2.ROTATE_180)
-                elif rotation == 3:
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                # rotation == 0: no rotation
                 with self.lock:
                     self.latest_frame = frame
             else:
