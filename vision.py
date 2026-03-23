@@ -8,7 +8,12 @@ from config_loader import cfg
 VISION_MODE = cfg["vision_mode"]
 
 ocr_instance = OCR()
+_app_state = None
 
+def bind_app_state(app_state):
+    global ocr_instance, _app_state
+    _app_state = app_state
+    ocr_instance = OCR(app_state=app_state)
 
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
@@ -38,16 +43,18 @@ def run_vision(frame, callback=None):
     If callback is provided, runs selected vision mode in a background thread.
     Otherwise, runs synchronously.
     """
-    if cfg["vision_mode"] == "ocr":
+    mode = _app_state.get_vision_mode() if _app_state else cfg["vision_mode"]
+
+    if mode == "ocr":
         if callback:
             _run_with_callback(ocr_instance.run, frame, callback)
             return None
         return ocr_instance.run(frame)
 
-    if cfg["vision_mode"] == "object_detection":
+    if mode == "object_detection":
         if callback:
             _run_with_callback(run_object_detection, frame, callback)
             return None
         return run_object_detection(frame)
 
-    raise ValueError(f"Unknown VISION_MODE: {cfg['vision_mode']}")
+    raise ValueError(f"Unknown VISION_MODE: {mode}")

@@ -1,7 +1,7 @@
 import threading
 import keyboard
 from camera import Camera
-from vision import run_vision
+from vision import run_vision, bind_app_state
 from web import create_app
 from state import AppState
 import time
@@ -74,9 +74,10 @@ def vision_trigger_loop(camera, app_state):
 def main():
     setup_logging()
     app_state = AppState()
+    bind_app_state(app_state)
 
     try:
-        camera = Camera(0)
+        camera = Camera(0, app_state=app_state)
 
         web_cfg = cfg["web"]
         app = create_app(camera, app_state)
