@@ -1,0 +1,110 @@
+{
+  "timestamp": "2026-03-23T10:01:55.376414",
+  "benchmark_duration_seconds_per_scenario": 30,
+  "poll_interval_ms": 100,
+  "description": "Compares setInterval (current) vs setTimeout-chain (fixed) polling with and without a competing MJPEG /video_feed stream.",
+  "column_key": {
+    "interval_no_stream": "Current code, no video stream",
+    "interval_with_stream": "Current code + MJPEG stream competing",
+    "chained_no_stream": "Fixed code, no video stream",
+    "chained_with_stream": "Fixed code + MJPEG stream competing"
+  },
+  "statistics": {
+    "interval_no_stream": {
+      "requests_fired": 276,
+      "valid_responses": 276,
+      "errors": 0,
+      "unique_results": 194,
+      "stale_rate_pct": 29.8,
+      "concurrent_peak": 1,
+      "response_latency": {
+        "min_ms": 2.32,
+        "max_ms": 40.84,
+        "mean_ms": 11.59,
+        "median_ms": 16.36,
+        "stdev_ms": 7.07,
+        "p95_ms": 18.32
+      },
+      "result_age": {
+        "min_ms": 0.0,
+        "max_ms": 144.25,
+        "mean_ms": 65.46,
+        "median_ms": 63.45,
+        "stdev_ms": 44.57,
+        "p95_ms": 139.95
+      }
+    },
+    "interval_with_stream": {
+      "requests_fired": 276,
+      "valid_responses": 276,
+      "errors": 0,
+      "unique_results": 193,
+      "stale_rate_pct": 30.2,
+      "concurrent_peak": 1,
+      "response_latency": {
+        "min_ms": 2.72,
+        "max_ms": 18.38,
+        "mean_ms": 6.69,
+        "median_ms": 3.95,
+        "stdev_ms": 5.52,
+        "p95_ms": 17.68
+      },
+      "result_age": {
+        "min_ms": 0.0,
+        "max_ms": 142.42,
+        "mean_ms": 69.42,
+        "median_ms": 64.18,
+        "stdev_ms": 44.75,
+        "p95_ms": 140.62
+      }
+    },
+    "chained_no_stream": {
+      "requests_fired": 253,
+      "valid_responses": 253,
+      "errors": 0,
+      "unique_results": 193,
+      "stale_rate_pct": 23.8,
+      "concurrent_peak": 1,
+      "response_latency": {
+        "min_ms": 2.5,
+        "max_ms": 22.31,
+        "mean_ms": 13.12,
+        "median_ms": 17.9,
+        "stdev_ms": 7.07,
+        "p95_ms": 19.43
+      },
+      "result_age": {
+        "min_ms": 0.0,
+        "max_ms": 142.0,
+        "mean_ms": 63.24,
+        "median_ms": 62.18,
+        "stdev_ms": 44.79,
+        "p95_ms": 138.89
+      }
+    },
+    "chained_with_stream": {
+      "requests_fired": 266,
+      "valid_responses": 266,
+      "errors": 0,
+      "unique_results": 193,
+      "stale_rate_pct": 27.5,
+      "concurrent_peak": 1,
+      "response_latency": {
+        "min_ms": 2.47,
+        "max_ms": 29.53,
+        "mean_ms": 7.15,
+        "median_ms": 3.82,
+        "stdev_ms": 6.12,
+        "p95_ms": 18.09
+      },
+      "result_age": {
+        "min_ms": 0.0,
+        "max_ms": 142.54,
+        "mean_ms": 66.32,
+        "median_ms": 62.68,
+        "stdev_ms": 44.67,
+        "p95_ms": 139.34
+      }
+    }
+  }
+}
