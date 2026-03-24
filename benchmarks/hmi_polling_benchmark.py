@@ -14,7 +14,10 @@ Optionally opens the /video_feed MJPEG stream during both runs to simulate
 (video stream competing for Flask threads).
 
 Run the app first:  python main.py
-Then run this:      python hmi_polling_benchmark.py [--host ...] [--port ...]
+Then run this:      python benchmarks/hmi_polling_benchmark.py --duration 30
+
+                    # If your video feed is disabled in config, add:
+                    python benchmarks/hmi_polling_benchmark.py --duration 30 --skip-video
 
 Requirements: pip install requests
 """
