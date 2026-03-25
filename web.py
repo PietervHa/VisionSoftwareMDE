@@ -3,6 +3,7 @@ from flask import Flask, Response, send_file
 from flask_cors import CORS
 from flask import jsonify, request
 from config_loader import cfg
+import time
 
 def create_app(camera, app_state):
     app = Flask(__name__)
@@ -55,12 +56,18 @@ def create_app(camera, app_state):
                     + buffer.tobytes()
                     + b"\r\n"
                 )
-                import time
                 time.sleep(1)  # Low CPU usage when disabled
 
+        # Frame rate cap at 30fps = 33.33ms per frame
+        FRAME_INTERVAL_MS = 33.33
+        
         while True:
+            frame_start = time.time()
+            
             frame = camera.get_frame()
             if frame is None:
+                # Sleep 10ms before retrying instead of immediately looping
+                time.sleep(0.01)
                 continue
 
             frame_for_stream = frame
@@ -74,6 +81,12 @@ def create_app(camera, app_state):
                 + buffer.tobytes()
                 + b"\r\n"
             )
+            
+            # Calculate elapsed time and sleep for remaining time in the 33ms window
+            elapsed_ms = (time.time() - frame_start) * 1000
+            remaining_ms = FRAME_INTERVAL_MS - elapsed_ms
+            if remaining_ms > 0:
+                time.sleep(remaining_ms / 1000)
 
     @app.route("/")
     def index():
