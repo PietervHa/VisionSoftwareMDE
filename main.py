@@ -10,6 +10,7 @@ from utils.logger import setup_logging, get_logger
 from output.result_writer import save_result
 
 log = get_logger(__name__)
+_vision_busy = False
 
 def _process_vision_result(result, trigger_time, app_state):
     """Callback to handle vision results from background thread"""
@@ -51,11 +52,15 @@ def _process_vision_result(result, trigger_time, app_state):
         log.error("Failed to process vision result: %s", exc)
 
 def vision_trigger_loop(camera, app_state):
+    global _vision_busy
     log.info("Press Q to trigger vision. Ctrl+C to exit.")
 
     while True:
         try:
             keyboard.wait("q")
+
+            if _vision_busy:
+                continue
 
             frame = camera.get_frame()
             if frame is None:
@@ -65,10 +70,20 @@ def vision_trigger_loop(camera, app_state):
             # Track trigger time for cycle time measurement
             trigger_time = time.perf_counter()
 
-            # Trigger OCR in background thread with callback
-            run_vision(frame, callback=lambda result: _process_vision_result(result, trigger_time, app_state))
+            def _callback(result):
+                global _vision_busy
+                try:
+                    _process_vision_result(result, trigger_time, app_state)
+                finally:
+                    _vision_busy = False
+
+            _vision_busy = True
+
+            # Trigger vision in background thread with callback
+            run_vision(frame, callback=_callback)
             log.debug("Vision processing started (non-blocking)")
         except Exception as exc:
+            _vision_busy = False
             log.error("Vision trigger loop error: %s", exc)
 
 def main():

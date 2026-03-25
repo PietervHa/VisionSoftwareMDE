@@ -84,9 +84,9 @@ function getPollingIntervalMs() {
     return VISION_MODE === "ocr" ? 100 : 500;
 }
 
-function startResultPolling() {
-    updateResult();
-    setInterval(updateResult, getPollingIntervalMs());
+async function startResultPolling() {
+    await updateResult();
+    setTimeout(startResultPolling, getPollingIntervalMs());
 }
 
 /* =========================

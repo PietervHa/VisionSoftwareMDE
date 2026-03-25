@@ -50,7 +50,7 @@ class Camera:
                     self.latest_frame = frame
             else:
                 log.warning("Camera frame read failed")
-            time.sleep(0.005)
+            time.sleep(1/30)
 
     def get_frame(self):
         with self.lock:

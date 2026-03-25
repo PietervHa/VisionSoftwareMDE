@@ -29,6 +29,7 @@ def _run_with_callback(fn, frame, callback):
                 "mode": cfg["vision_mode"],
                 "error": str(exc),
             }
+
         callback(result)
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -42,6 +43,7 @@ def run_vision(frame, callback=None):
 
     If callback is provided, runs selected vision mode in a background thread.
     Otherwise, runs synchronously.
+    
     """
     mode = _app_state.get_vision_mode() if _app_state else cfg["vision_mode"]
 
