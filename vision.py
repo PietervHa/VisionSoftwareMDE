@@ -9,7 +9,6 @@ VISION_MODE = cfg["vision_mode"]
 
 ocr_instance = OCR()
 _app_state = None
-_vision_busy = False
 
 def bind_app_state(app_state):
     global ocr_instance, _app_state
@@ -19,7 +18,6 @@ def bind_app_state(app_state):
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
     def worker():
-        global _vision_busy
         start = time.perf_counter()
         try:
             result = fn(frame)
@@ -31,12 +29,8 @@ def _run_with_callback(fn, frame, callback):
                 "mode": cfg["vision_mode"],
                 "error": str(exc),
             }
-        
-        # Wrap callback to reset flag after result is handled
-        try:
-            callback(result)
-        finally:
-            _vision_busy = False
+
+        callback(result)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -50,27 +44,17 @@ def run_vision(frame, callback=None):
     If callback is provided, runs selected vision mode in a background thread.
     Otherwise, runs synchronously.
     
-    Prevents concurrent vision threads from stacking up by checking _vision_busy flag.
     """
-    global _vision_busy
     mode = _app_state.get_vision_mode() if _app_state else cfg["vision_mode"]
 
     if mode == "ocr":
         if callback:
-            # Check flag before spawning thread — if already busy, return immediately
-            if _vision_busy:
-                return
-            _vision_busy = True
             _run_with_callback(ocr_instance.run, frame, callback)
             return None
         return ocr_instance.run(frame)
 
     if mode == "object_detection":
         if callback:
-            # Check flag before spawning thread — if already busy, return immediately
-            if _vision_busy:
-                return
-            _vision_busy = True
             _run_with_callback(run_object_detection, frame, callback)
             return None
         return run_object_detection(frame)
