@@ -10,7 +10,7 @@ log = get_logger(__name__)
 class PaddleOCR:
     def __init__(self, app_state=None):
         self.app_state = app_state
-        self._paddle = _PaddleOCR(use_angle_cls=True, lang="en", use_gpu=False, show_log=False)
+        self._paddle = _PaddleOCR(lang="en")
         ocr_cfg = cfg["ocr"]
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.date_regex = ocr_cfg["date_regex"]
