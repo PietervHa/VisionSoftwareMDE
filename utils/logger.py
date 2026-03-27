@@ -29,6 +29,10 @@ def setup_logging():
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
+
+    # Hide per-request Flask development server logs (e.g., GET /result 200).
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
     root_logger._vision_logging_configured = True
 
 
