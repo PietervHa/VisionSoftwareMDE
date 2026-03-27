@@ -1,0 +1,546 @@
+{
+  "engine": "tesseract",
+  "image": "test eticket voor OCR 1.png",
+  "detections": [
+    {
+      "text": "NL]",
+      "confidence": 58.0,
+      "bbox": [
+        247,
+        76,
+        25,
+        25
+      ]
+    },
+    {
+      "text": "100%",
+      "confidence": 90.0,
+      "bbox": [
+        276,
+        73,
+        43,
+        22
+      ]
+    },
+    {
+      "text": "BIOLOGISCH",
+      "confidence": 90.0,
+      "bbox": [
+        323,
+        68,
+        120,
+        25
+      ]
+    },
+    {
+      "text": "MAGER",
+      "confidence": 92.0,
+      "bbox": [
+        449,
+        67,
+        70,
+        21
+      ]
+    },
+    {
+      "text": "CACAOPOEDER.",
+      "confidence": 40.0,
+      "bbox": [
+        524,
+        67,
+        137,
+        30
+      ]
+    },
+    {
+      "text": "vost",
+      "confidence": 27.0,
+      "bbox": [
+        241,
+        74,
+        39,
+        57
+      ]
+    },
+    {
+      "text": "\u2018en",
+      "confidence": 88.0,
+      "bbox": [
+        283,
+        106,
+        18,
+        15
+      ]
+    },
+    {
+      "text": "beleef",
+      "confidence": 82.0,
+      "bbox": [
+        305,
+        97,
+        50,
+        23
+      ]
+    },
+    {
+      "text": "pure",
+      "confidence": 96.0,
+      "bbox": [
+        359,
+        102,
+        37,
+        21
+      ]
+    },
+    {
+      "text": "superfoods,",
+      "confidence": 92.0,
+      "bbox": [
+        400,
+        94,
+        102,
+        31
+      ]
+    },
+    {
+      "text": "unieke",
+      "confidence": 92.0,
+      "bbox": [
+        507,
+        94,
+        54,
+        21
+      ]
+    },
+    {
+      "text": "producten",
+      "confidence": 75.0,
+      "bbox": [
+        565,
+        95,
+        74,
+        25
+      ]
+    },
+    {
+      "text": "dieje",
+      "confidence": 24.0,
+      "bbox": [
+        643,
+        96,
+        32,
+        25
+      ]
+    },
+    {
+      "text": "cht",
+      "confidence": 24.0,
+      "bbox": [
+        678,
+        98,
+        23,
+        19
+      ]
+    },
+    {
+      "text": "voeden,",
+      "confidence": 82.0,
+      "bbox": [
+        243,
+        128,
+        57,
+        20
+      ]
+    },
+    {
+      "text": "Rauwe",
+      "confidence": 92.0,
+      "bbox": [
+        304,
+        126,
+        55,
+        20
+      ]
+    },
+    {
+      "text": "cacaopoeder",
+      "confidence": 91.0,
+      "bbox": [
+        364,
+        122,
+        112,
+        26
+      ]
+    },
+    {
+      "text": "is",
+      "confidence": 93.0,
+      "bbox": [
+        480,
+        126,
+        13,
+        16
+      ]
+    },
+    {
+      "text": "afkomstig",
+      "confidence": 92.0,
+      "bbox": [
+        497,
+        121,
+        79,
+        26
+      ]
+    },
+    {
+      "text": "van",
+      "confidence": 96.0,
+      "bbox": [
+        580,
+        126,
+        26,
+        15
+      ]
+    },
+    {
+      "text": "de",
+      "confidence": 93.0,
+      "bbox": [
+        610,
+        121,
+        18,
+        20
+      ]
+    },
+    {
+      "text": "cacaoboon",
+      "confidence": 85.0,
+      "bbox": [
+        632,
+        122,
+        66,
+        20
+      ]
+    },
+    {
+      "text": "enkunje",
+      "confidence": 74.0,
+      "bbox": [
+        244,
+        153,
+        63,
+        25
+      ]
+    },
+    {
+      "text": "gemakkelijk",
+      "confidence": 68.0,
+      "bbox": [
+        310,
+        150,
+        97,
+        27
+      ]
+    },
+    {
+      "text": "in",
+      "confidence": 96.0,
+      "bbox": [
+        411,
+        149,
+        14,
+        20
+      ]
+    },
+    {
+      "text": "smoothies,",
+      "confidence": 93.0,
+      "bbox": [
+        430,
+        148,
+        91,
+        23
+      ]
+    },
+    {
+      "text": "(chocolade)drank,",
+      "confidence": 70.0,
+      "bbox": [
+        527,
+        147,
+        132,
+        26
+      ]
+    },
+    {
+      "text": "desserts",
+      "confidence": 70.0,
+      "bbox": [
+        662,
+        147,
+        48,
+        20
+      ]
+    },
+    {
+      "text": "engebak",
+      "confidence": 90.0,
+      "bbox": [
+        245,
+        178,
+        65,
+        21
+      ]
+    },
+    {
+      "text": "verwerken.",
+      "confidence": 90.0,
+      "bbox": [
+        313,
+        177,
+        90,
+        21
+      ]
+    },
+    {
+      "text": "Droog",
+      "confidence": 91.0,
+      "bbox": [
+        408,
+        176,
+        52,
+        25
+      ]
+    },
+    {
+      "text": "en",
+      "confidence": 91.0,
+      "bbox": [
+        465,
+        180,
+        20,
+        15
+      ]
+    },
+    {
+      "text": "donker",
+      "confidence": 91.0,
+      "bbox": [
+        490,
+        174,
+        57,
+        21
+      ]
+    },
+    {
+      "text": "bewaren.",
+      "confidence": 90.0,
+      "bbox": [
+        551,
+        174,
+        68,
+        20
+      ]
+    },
+    {
+      "text": "Cacaoboler",
+      "confidence": 82.0,
+      "bbox": [
+        623,
+        172,
+        73,
+        20
+      ]
+    },
+    {
+      "text": "4th.",
+      "confidence": 0.0,
+      "bbox": [
+        247,
+        204,
+        31,
+        20
+      ]
+    },
+    {
+      "text": "Ten",
+      "confidence": 93.0,
+      "bbox": [
+        282,
+        204,
+        28,
+        20
+      ]
+    },
+    {
+      "text": "minste",
+      "confidence": 83.0,
+      "bbox": [
+        314,
+        204,
+        52,
+        19
+      ]
+    },
+    {
+      "text": "houdbaar",
+      "confidence": 90.0,
+      "bbox": [
+        370,
+        202,
+        81,
+        21
+      ]
+    },
+    {
+      "text": "tot:",
+      "confidence": 90.0,
+      "bbox": [
+        455,
+        202,
+        25,
+        20
+      ]
+    },
+    {
+      "text": "zie",
+      "confidence": 93.0,
+      "bbox": [
+        485,
+        201,
+        24,
+        20
+      ]
+    },
+    {
+      "text": "verpakking.",
+      "confidence": 55.0,
+      "bbox": [
+        513,
+        199,
+        90,
+        26
+      ]
+    },
+    {
+      "text": "we",
+      "confidence": 27.0,
+      "bbox": [
+        249,
+        264,
+        242,
+        48
+      ]
+    },
+    {
+      "text": "ingswaarde/Valeur",
+      "confidence": 43.0,
+      "bbox": [
+        285,
+        293,
+        155,
+        19
+      ]
+    },
+    {
+      "text": "nutritive",
+      "confidence": 94.0,
+      "bbox": [
+        448,
+        286,
+        71,
+        38
+      ]
+    },
+    {
+      "text": "100",
+      "confidence": 37.0,
+      "bbox": [
+        527,
+        290,
+        29,
+        21
+      ]
+    },
+    {
+      "text": "itr",
+      "confidence": 54.0,
+      "bbox": [
+        286,
+        294,
+        39,
+        57
+      ]
+    },
+    {
+      "text": "jeleneroiel\u00e9nercie",
+      "confidence": 0.0,
+      "bbox": [
+        340,
+        323,
+        135,
+        21
+      ]
+    },
+    {
+      "text": "4",
+      "confidence": 36.0,
+      "bbox": [
+        559,
+        295,
+        10,
+        20
+      ]
+    },
+    {
+      "text": "sist",
+      "confidence": 47.0,
+      "bbox": [
+        641,
+        301,
+        66,
+        56
+      ]
+    },
+    {
+      "text": "B",
+      "confidence": 0.0,
+      "bbox": [
+        712,
+        304,
+        16,
+        45
+      ]
+    },
+    {
+      "text": "Uetvelraises",
+      "confidence": 0.0,
+      "bbox": [
+        252,
+        345,
+        135,
+        41
+      ]
+    },
+    {
+      "text": ":",
+      "confidence": 0.0,
+      "bbox": [
+        498,
+        377,
+        3,
+        3
+      ]
+    },
+    {
+      "text": "699",
+      "confidence": 66.0,
+      "bbox": [
+        689,
+        355,
+        28,
+        24
+      ]
+    }
+  ]
+}

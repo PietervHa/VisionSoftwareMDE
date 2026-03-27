@@ -1,0 +1,66 @@
+{
+  "engine": "tesseract",
+  "image": "test eticket voor OCR 4.png",
+  "detections": [
+    {
+      "text": "PSIMAGINGSOURC",
+      "confidence": 0.0,
+      "bbox": [
+        118,
+        45,
+        542,
+        95
+      ]
+    },
+    {
+      "text": "RCE",
+      "confidence": 96.0,
+      "bbox": [
+        597,
+        50,
+        113,
+        85
+      ]
+    },
+    {
+      "text": "BASED",
+      "confidence": 95.0,
+      "bbox": [
+        419,
+        113,
+        82,
+        22
+      ]
+    },
+    {
+      "text": "ON",
+      "confidence": 93.0,
+      "bbox": [
+        510,
+        113,
+        38,
+        22
+      ]
+    },
+    {
+      "text": "STANDA",
+      "confidence": 90.0,
+      "bbox": [
+        558,
+        113,
+        102,
+        22
+      ]
+    },
+    {
+      "text": "www.theimagingsource.c",
+      "confidence": 91.0,
+      "bbox": [
+        181,
+        470,
+        413,
+        31
+      ]
+    }
+  ]
+}
