@@ -1,0 +1,426 @@
+{
+  "engine": "tesseract",
+  "image": "test eticket OCR 3.png",
+  "detections": [
+    {
+      "text": "Runderknakworst",
+      "confidence": 93.0,
+      "bbox": [
+        48,
+        6,
+        151,
+        27
+      ]
+    },
+    {
+      "text": "re",
+      "confidence": 36.0,
+      "bbox": [
+        330,
+        8,
+        43,
+        11
+      ]
+    },
+    {
+      "text": "400",
+      "confidence": 96.0,
+      "bbox": [
+        46,
+        37,
+        46,
+        27
+      ]
+    },
+    {
+      "text": "gram",
+      "confidence": 94.0,
+      "bbox": [
+        103,
+        45,
+        62,
+        24
+      ]
+    },
+    {
+      "text": "\u00a9",
+      "confidence": 75.0,
+      "bbox": [
+        176,
+        40,
+        26,
+        24
+      ]
+    },
+    {
+      "text": "Uitlekgewicht",
+      "confidence": 86.0,
+      "bbox": [
+        46,
+        72,
+        110,
+        35
+      ]
+    },
+    {
+      "text": "200",
+      "confidence": 94.0,
+      "bbox": [
+        164,
+        83,
+        26,
+        16
+      ]
+    },
+    {
+      "text": "gram",
+      "confidence": 87.0,
+      "bbox": [
+        197,
+        83,
+        52,
+        20
+      ]
+    },
+    {
+      "text": "/",
+      "confidence": 84.0,
+      "bbox": [
+        242,
+        73,
+        7,
+        35
+      ]
+    },
+    {
+      "text": "10",
+      "confidence": 84.0,
+      "bbox": [
+        257,
+        83,
+        17,
+        17
+      ]
+    },
+    {
+      "text": "stuks",
+      "confidence": 82.0,
+      "bbox": [
+        281,
+        77,
+        43,
+        23
+      ]
+    },
+    {
+      "text": "onersie",
+      "confidence": 11.0,
+      "bbox": [
+        330,
+        27,
+        32,
+        8
+      ]
+    },
+    {
+      "text": "Ingredi\u00e9nten:",
+      "confidence": 84.0,
+      "bbox": [
+        45,
+        115,
+        60,
+        12
+      ]
+    },
+    {
+      "text": "51%",
+      "confidence": 93.0,
+      "bbox": [
+        113,
+        115,
+        17,
+        9
+      ]
+    },
+    {
+      "text": "rundvlees,",
+      "confidence": 72.0,
+      "bbox": [
+        136,
+        106,
+        46,
+        28
+      ]
+    },
+    {
+      "text": "33%",
+      "confidence": 92.0,
+      "bbox": [
+        186,
+        115,
+        11,
+        11
+      ]
+    },
+    {
+      "text": "kippenseperatorvees,",
+      "confidence": 53.0,
+      "bbox": [
+        211,
+        115,
+        91,
+        11
+      ]
+    },
+    {
+      "text": "_vedings",
+      "confidence": 34.0,
+      "bbox": [
+        333,
+        113,
+        40,
+        11
+      ]
+    },
+    {
+      "text": "water,",
+      "confidence": 59.0,
+      "bbox": [
+        45,
+        129,
+        24,
+        9
+      ]
+    },
+    {
+      "text": "tar",
+      "confidence": 59.0,
+      "bbox": [
+        75,
+        129,
+        15,
+        9
+      ]
+    },
+    {
+      "text": "lantaardigeinithydrolys",
+      "confidence": 50.0,
+      "bbox": [
+        166,
+        129,
+        101,
+        10
+      ]
+    },
+    {
+      "text": "atrium",
+      "confidence": 22.0,
+      "bbox": [
+        333,
+        126,
+        40,
+        8
+      ]
+    },
+    {
+      "text": "fundercolagen,",
+      "confidence": 1.0,
+      "bbox": [
+        45,
+        142,
+        71,
+        17
+      ]
+    },
+    {
+      "text": "nati",
+      "confidence": 18.0,
+      "bbox": [
+        123,
+        142,
+        41,
+        11
+      ]
+    },
+    {
+      "text": "eka,",
+      "confidence": 24.0,
+      "bbox": [
+        182,
+        142,
+        12,
+        8
+      ]
+    },
+    {
+      "text": "ken",
+      "confidence": 48.0,
+      "bbox": [
+        209,
+        142,
+        42,
+        21
+      ]
+    },
+    {
+      "text": "en",
+      "confidence": 59.0,
+      "bbox": [
+        256,
+        132,
+        10,
+        35
+      ]
+    },
+    {
+      "text": "peceien,",
+      "confidence": 20.0,
+      "bbox": [
+        269,
+        143,
+        45,
+        9
+      ]
+    },
+    {
+      "text": "Ean",
+      "confidence": 51.0,
+      "bbox": [
+        326,
+        132,
+        21,
+        35
+      ]
+    },
+    {
+      "text": "rnd",
+      "confidence": 51.0,
+      "bbox": [
+        350,
+        144,
+        19,
+        9
+      ]
+    },
+    {
+      "text": "stabilisatoren",
+      "confidence": 48.0,
+      "bbox": [
+        45,
+        155,
+        67,
+        10
+      ]
+    },
+    {
+      "text": "(E450,",
+      "confidence": 71.0,
+      "bbox": [
+        114,
+        155,
+        33,
+        9
+      ]
+    },
+    {
+      "text": "E\u00a2",
+      "confidence": 45.0,
+      "bbox": [
+        143,
+        146,
+        8,
+        28
+      ]
+    },
+    {
+      "text": "50)",
+      "confidence": 72.0,
+      "bbox": [
+        270,
+        154,
+        9,
+        6
+      ]
+    },
+    {
+      "text": "gefermentore",
+      "confidence": 8.0,
+      "bbox": [
+        45,
+        169,
+        76,
+        19
+      ]
+    },
+    {
+      "text": "Opgiet:",
+      "confidence": 82.0,
+      "bbox": [
+        46,
+        182,
+        29,
+        12
+      ]
+    },
+    {
+      "text": "wate",
+      "confidence": 86.0,
+      "bbox": [
+        96,
+        183,
+        7,
+        8
+      ]
+    },
+    {
+      "text": "\u2018ilergie-informatie:",
+      "confidence": 63.0,
+      "bbox": [
+        46,
+        208,
+        90,
+        12
+      ]
+    },
+    {
+      "text": "ovat",
+      "confidence": 59.0,
+      "bbox": [
+        143,
+        208,
+        23,
+        9
+      ]
+    },
+    {
+      "text": "soja,",
+      "confidence": 59.0,
+      "bbox": [
+        180,
+        207,
+        15,
+        11
+      ]
+    },
+    {
+      "text": "lactose,",
+      "confidence": 67.0,
+      "bbox": [
+        209,
+        209,
+        14,
+        6
+      ]
+    },
+    {
+      "text": "mele",
+      "confidence": 59.0,
+      "bbox": [
+        230,
+        207,
+        24,
+        8
+      ]
+    }
+  ]
+}

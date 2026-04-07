@@ -15,6 +15,7 @@ roi:
 
 # OCR settings
 ocr:
+  engine: "tesseract"   # valid values: "tesseract" (default), "paddleocr"
   keywords:
     - "www.theimagingsource.com"
   # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
