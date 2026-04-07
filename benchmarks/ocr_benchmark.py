@@ -15,13 +15,13 @@ from backend.core import vision
 
 log = get_logger(__name__)
 
-class ObjectDetectionBenchmark:
+class OCRBenchmark:
     """
-    Benchmark object detection throughput and per-frame processing time.
+    Benchmark OCR throughput and per-frame timing.
     Uses the same async callback pattern as main.py.
     """
 
-    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=2):
+    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=4):
         self.duration = duration_seconds
         self.flush_wait_seconds = flush_wait_seconds
         self.max_inflight = max_inflight
@@ -35,6 +35,7 @@ class ObjectDetectionBenchmark:
         self._inflight = 0
 
     def _on_vision_result(self, result, trigger_time, frame_num):
+        """Callback to handle async OCR results."""
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 2)
         processing_time_ms = float(result.get("processing_time_ms", 0.0))
         detections = result.get("detections", [])
@@ -53,19 +54,19 @@ class ObjectDetectionBenchmark:
             self.completed_count += 1
             if error_message:
                 self.error_count += 1
-                log.error("Frame %s object-detection error: %s", frame_num, error_message)
+                log.error("Frame %s OCR error: %s", frame_num, error_message)
             self._inflight = max(0, self._inflight - 1)
 
             completed_frames = self.completed_count
             if completed_frames % 10 == 0:
                 last_10 = self.results[-10:]
-                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / 10)
-                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / 10)
+                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / len(last_10))
+                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / len(last_10))
                 total_detections = sum(r["detection_count"] for r in last_10)
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
                 log.debug(
-                    "Frames %s-%s: %sms avg OD, %sms avg cycle, %s detections",
+                    "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
                     batch_start,
                     batch_end,
                     avg_proc,
@@ -74,7 +75,7 @@ class ObjectDetectionBenchmark:
                 )
 
     def run_benchmark(self, camera):
-        log.info("Starting Object Detection Benchmark (%s seconds)...", self.duration)
+        log.info("Starting OCR Benchmark (%s seconds)...", self.duration)
         log.info("Processing frames asynchronously (matches production behavior)...")
 
         self.running = True
@@ -96,7 +97,7 @@ class ObjectDetectionBenchmark:
 
             self.frame_count += 1
 
-            # Apply backpressure so OD workers can complete and produce data.
+            # Apply backpressure to avoid unlimited OCR worker buildup.
             while True:
                 with self.lock:
                     if self._inflight < self.max_inflight:
@@ -112,7 +113,7 @@ class ObjectDetectionBenchmark:
                 self.frame_count -= 1
                 break
 
-            # Cycle starts when the async vision job is actually dispatched.
+            # Cycle starts when the async OCR job is actually dispatched.
             trigger_time = time.perf_counter()
             vision.run_vision(
                 frame,
@@ -122,7 +123,7 @@ class ObjectDetectionBenchmark:
             )
 
         elapsed = time.perf_counter() - self.start_time
-        log.info("Benchmark time elapsed. Waiting for remaining worker threads to finish...")
+        log.info("Benchmark time elapsed. Waiting for remaining OCR threads to finish...")
 
         wait_start = time.perf_counter()
         while True:
@@ -189,7 +190,7 @@ class ObjectDetectionBenchmark:
         output_path.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = output_path / f"object_detection_benchmark_{timestamp}.json"
+        filename = output_path / f"ocr_benchmark_{timestamp}.json"
 
         report = {
             "timestamp": datetime.now().isoformat(),
@@ -212,7 +213,7 @@ class ObjectDetectionBenchmark:
             return
 
         log.info("%s", "=" * 60)
-        log.info("OBJECT DETECTION BENCHMARK SUMMARY")
+        log.info("OCR BENCHMARK SUMMARY")
         log.info("%s", "=" * 60)
         log.info("Mode: %s", cfg["vision_mode"])
         log.info("Benchmark Duration: %s seconds", stats["duration_seconds"])
@@ -226,7 +227,7 @@ class ObjectDetectionBenchmark:
         log.info("  Mean:   %s ms", stats["cycle_time"]["mean_ms"])
         log.info("  Median: %s ms", stats["cycle_time"]["median_ms"])
         log.info("  StdDev: %s ms", stats["cycle_time"]["stdev_ms"])
-        log.info("PROCESSING TIME (Object detection inference):")
+        log.info("PROCESSING TIME (OCR inference):")
         log.info("  Min:    %s ms", stats["processing_time"]["min_ms"])
         log.info("  Max:    %s ms", stats["processing_time"]["max_ms"])
         log.info("  Mean:   %s ms", stats["processing_time"]["mean_ms"])
@@ -241,7 +242,7 @@ class ObjectDetectionBenchmark:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run object detection benchmark")
+    parser = argparse.ArgumentParser(description="Run OCR benchmark")
     parser.add_argument("--duration", type=int, default=30, help="Benchmark duration in seconds")
     parser.add_argument(
         "--output-dir",
@@ -257,8 +258,8 @@ def parse_args():
     parser.add_argument(
         "--max-inflight",
         type=int,
-        default=2,
-        help="Maximum in-flight async object-detection jobs",
+        default=4,
+        help="Maximum in-flight async OCR jobs",
     )
     return parser.parse_args()
 
@@ -267,13 +268,13 @@ def main():
     setup_logging()
     args = parse_args()
 
-    if cfg["vision_mode"] != "object_detection":
-        print("WARNING: config vision_mode is not 'object_detection'.")
-        print("Set vision_mode: object_detection in config/default.yaml to benchmark OD.")
+    if cfg["vision_mode"] != "ocr":
+        print("WARNING: config vision_mode is not 'ocr'.")
+        print("Set vision_mode: ocr in config/default.yaml to benchmark OCR.")
         sys.exit(1)
 
     camera = Camera(0)
-    benchmark = ObjectDetectionBenchmark(
+    benchmark = OCRBenchmark(
         duration_seconds=args.duration,
         flush_wait_seconds=args.flush_wait,
         max_inflight=max(1, args.max_inflight),
@@ -293,4 +294,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

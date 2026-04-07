@@ -53,5 +53,5 @@ web:
 
 # Output settings
 output:
-  result_dir: "results"
+  result_dir: "data/results"
 
