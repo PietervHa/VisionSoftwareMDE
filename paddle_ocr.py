@@ -39,7 +39,7 @@ class PaddleOCR:
         mode = self.preprocess_mode
         if mode == "off":
             return frame
-        
+
         # Convert to grayscale for preprocessing
         if len(frame.shape) == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -50,7 +50,7 @@ class PaddleOCR:
             # Otsu thresholding is faster than CLAHE
             _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             return binary
-        
+
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
@@ -112,7 +112,7 @@ class PaddleOCR:
         # Apply ROI and downscale on frame
         roi_frame = self._apply_roi(frame)
         roi_frame = self._downscale_roi(roi_frame)
-        
+
         log.debug("DEBUG: roi_frame shape=%s, dtype=%s", roi_frame.shape, roi_frame.dtype)
 
         keywords = (
@@ -149,14 +149,14 @@ class PaddleOCR:
                     log.debug("DEBUG: Page %d, Item %d: type=%s, len=%s, content=%s", page_idx, item_idx, type(item), len(item) if isinstance(item, (list, tuple)) else 'N/A', str(item)[:100])
                     if not isinstance(item, (list, tuple)) or len(item) < 2:
                         continue
-                    
+
                     bbox = item[0]
                     rec = item[1]
-                    
+
                     if not isinstance(rec, (list, tuple)) or len(rec) < 2:
                         log.debug("DEBUG: Skipping item - rec is invalid: type=%s, len=%s", type(rec), len(rec) if isinstance(rec, (list, tuple)) else 'N/A')
                         continue
-                    
+
                     text = rec[0]
                     score = rec[1]
 
