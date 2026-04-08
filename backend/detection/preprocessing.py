@@ -1,14 +1,5 @@
-"""Shared image preprocessing for model inference and dataset pipelines.
-
-This module defines a single preprocessing entry point that should be reused
-across inference, training, and dataset generation to avoid train/inference
-mismatch.
-"""
-
 from __future__ import annotations
-
 from typing import Tuple
-
 import cv2
 import numpy as np
 
@@ -60,12 +51,4 @@ def preprocess(frame: np.ndarray, size: Size, to_rgb: bool = True) -> np.ndarray
 
     return resized.astype(np.float32) / 255.0
 
-
-# Example usage: YOLO inference (reusable pipeline step)
-# model_input = preprocess(frame, size=(640, 640), to_rgb=True)
-# results = yolo_model(model_input)
-
-# Example usage: future classifier pipeline
-# classifier_input = preprocess(frame, size=(224, 224), to_rgb=True)
-# logits = classifier_model(classifier_input)
 
