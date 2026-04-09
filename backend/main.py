@@ -19,17 +19,11 @@ def _process_vision_result(result, trigger_time, app_state):
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
 
         threshold = app_state.get_threshold()
-
-        high_conf = [
-            d for d in result["detections"]
-            if d["confidence"] >= threshold
-        ]
-
-        status = "OK" if high_conf else "NOK"
+        status = result["status"]
+        confidence = result.get("confidence", 0)
 
         result_dict = {
             **result,
-            "status": status,
             "confidence_threshold": threshold,
             "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
         }
@@ -43,10 +37,10 @@ def _process_vision_result(result, trigger_time, app_state):
 
         detection_count = len(result.get("detections", []))
         log.info(
-            "VISION RESULT: status=%s cycle_time_ms=%s detections=%s",
+            "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s",
             status,
             cycle_time_ms,
-            detection_count,
+            confidence,
         )
     except Exception as exc:
         log.error("Failed to process vision result: %s", exc)
