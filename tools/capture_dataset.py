@@ -1,10 +1,7 @@
 from __future__ import annotations
-
 import time
 from pathlib import Path
-
 import cv2
-
 from backend.core.camera import Camera
 from backend.core.config_loader import cfg
 
