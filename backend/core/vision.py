@@ -45,7 +45,8 @@ def run_vision(frame, callback=None):
     Otherwise, runs synchronously.
     
     """
-    mode = _app_state.get_vision_mode() if _app_state is not None else cfg["vision_mode"]
+    mode_getter = getattr(_app_state, "get_vision_mode", None)
+    mode = mode_getter() if callable(mode_getter) else cfg["vision_mode"]
 
     if mode == "ocr":
         if callback:
