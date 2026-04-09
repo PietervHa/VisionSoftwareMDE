@@ -5,6 +5,7 @@ from pathlib import Path
 
 import cv2
 
+from backend.core.camera import Camera
 from backend.core.config_loader import cfg
 
 
@@ -32,19 +33,26 @@ class DatasetCapture:
         return output_path
 
     def run(self):
-        cap = cv2.VideoCapture(self.camera_index)
-        if not cap.isOpened():
+        camera = Camera(app_state=None)
+        if not camera.cap.isOpened():
             print(f"Failed to open camera index {self.camera_index}")
             return
 
         window_name = "Dataset Capture | O=OK  D=Defective  Q=Quit"
+        empty_reads = 0
 
         try:
             while True:
-                ok, frame = cap.read()
-                if not ok or frame is None:
-                    print("Failed to read frame from camera.")
-                    break
+                frame = camera.get_frame()
+                if frame is None:
+                    # Camera updates frames in a background thread; allow a short warm-up.
+                    empty_reads += 1
+                    if empty_reads > 60:
+                        print("Failed to read frame from camera.")
+                        break
+                    time.sleep(0.02)
+                    continue
+                empty_reads = 0
 
                 overlay = frame.copy()
                 counts_text = f"OK: {self.counters['ok']} | Defective: {self.counters['defective']}"
@@ -74,7 +82,7 @@ class DatasetCapture:
                 if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:
-            cap.release()
+            camera.release()
             cv2.destroyAllWindows()
             print(
                 "Capture complete. Final totals - OK: {ok}, Defective: {defective}".format(
