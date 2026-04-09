@@ -38,7 +38,7 @@ class DatasetCapture:
             print(f"Failed to open camera index {self.camera_index}")
             return
 
-        window_name = "Dataset Capture | O=OK  D=Defective  Q=Quit"
+        window_name = "Dataset Capture | 1=OK  2=Defective  Q=Quit"
         empty_reads = 0
 
         try:
