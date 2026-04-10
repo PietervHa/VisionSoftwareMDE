@@ -19,6 +19,7 @@ class DatasetCapture:
 
         self.camera_index = int(cfg["camera"]["index"])
         self.counters = {"ok": 0, "defective": 0}
+        self.rotation_steps = 0  # 0,1,2,3 => 0/90/180/270 clockwise
 
     def _save_frame(self, frame, label: str) -> Path:
         timestamp_ms = int(time.time() * 1000)
@@ -29,13 +30,22 @@ class DatasetCapture:
         self.counters[label] += 1
         return output_path
 
+    def _apply_rotation(self, frame):
+        if self.rotation_steps == 1:
+            return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        if self.rotation_steps == 2:
+            return cv2.rotate(frame, cv2.ROTATE_180)
+        if self.rotation_steps == 3:
+            return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        return frame
+
     def run(self):
         camera = Camera(app_state=None)
         if not camera.cap.isOpened():
             print(f"Failed to open camera index {self.camera_index}")
             return
 
-        window_name = "Dataset Capture | 1=OK  2=Defective  Q=Quit"
+        window_name = "Dataset Capture | 1=OK  2=Defective  W=Rotate  Q=Quit"
         empty_reads = 0
 
         try:
@@ -51,8 +61,10 @@ class DatasetCapture:
                     continue
                 empty_reads = 0
 
-                overlay = frame.copy()
+                display_frame = self._apply_rotation(frame)
+                overlay = display_frame.copy()
                 counts_text = f"OK: {self.counters['ok']} | Defective: {self.counters['defective']}"
+                rotation_text = f"Rotation: {self.rotation_steps * 90} deg"
                 cv2.putText(
                     overlay,
                     counts_text,
@@ -63,16 +75,29 @@ class DatasetCapture:
                     2,
                     cv2.LINE_AA,
                 )
+                cv2.putText(
+                    overlay,
+                    rotation_text,
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
 
                 cv2.imshow(window_name, overlay)
                 key = cv2.waitKey(1) & 0xFF
 
                 if key == ord("1"):
-                    self._save_frame(frame, "ok")
+                    self._save_frame(display_frame, "ok")
                     print(f"Saved OK: {self.counters['ok']} images")
                 elif key == ord("2"):
-                    self._save_frame(frame, "defective")
+                    self._save_frame(display_frame, "defective")
                     print(f"Saved Defective: {self.counters['defective']} images")
+                elif key == ord("w"):
+                    self.rotation_steps = (self.rotation_steps + 1) % 4
+                    print(f"Rotation set to {self.rotation_steps * 90} degrees")
                 elif key == ord("q"):
                     break
 
@@ -91,7 +116,7 @@ class DatasetCapture:
 
 def main():
     print("Dataset Capture Tool")
-    print("Press '1' to save an OK image, '2' to save a Defective image, and 'q' to quit.")
+    print("Press '1' to save an OK image, '2' to save a Defective image, 'w' to rotate 90 degrees, and 'q' to quit.")
     capture = DatasetCapture(save_dir="data/dataset")
     capture.run()
 
