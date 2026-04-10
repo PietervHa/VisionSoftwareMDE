@@ -3,17 +3,25 @@ from backend.detection.ocr import OCR
 import threading
 import time
 from backend.core.config_loader import cfg
+from backend.core.inspection_engine import InspectionEngine
 
 # Backward-compatible alias; primary source is cfg["vision_mode"].
 VISION_MODE = cfg["vision_mode"]
 
 ocr_instance = OCR()
+_inspection_engine = None
 _app_state = None
 
 def bind_app_state(app_state):
-    global ocr_instance, _app_state
+    global ocr_instance, _inspection_engine, _app_state
     _app_state = app_state
     ocr_instance = OCR(app_state=app_state)
+    _inspection_engine = InspectionEngine(app_state)
+
+def load_classifier(model_path: str) -> bool:
+    if _inspection_engine is None:
+        return False
+    return bool(_inspection_engine.load_classifier(model_path))
 
 def _run_with_callback(fn, frame, callback):
     # Keep vision trigger loop non-blocking by running inference in a daemon worker.
@@ -35,7 +43,6 @@ def _run_with_callback(fn, frame, callback):
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
 
-
 def run_vision(frame, callback=None):
     """
     Dispatcher function that routes to OCR or object detection
@@ -43,7 +50,7 @@ def run_vision(frame, callback=None):
 
     If callback is provided, runs selected vision mode in a background thread.
     Otherwise, runs synchronously.
-    
+
     """
     mode_getter = getattr(_app_state, "get_vision_mode", None)
     mode = mode_getter() if callable(mode_getter) else cfg["vision_mode"]

@@ -159,6 +159,35 @@ def create_app(camera, app_state):
         app_state.set_ocr_keyword(new_keyword)
         return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
 
+    @app.route("/load_classifier", methods=["POST"])
+    def load_classifier():
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+
+        data = request.json or {}
+        model_path = str(data.get("model_path", "")).strip()
+
+        root_dir = Path(__file__).resolve().parents[1]
+        resolved_path = Path(model_path)
+        if not resolved_path.is_absolute():
+            resolved_path = root_dir / resolved_path
+
+        if not model_path or not resolved_path.exists():
+            return jsonify({"error": "model_path does not exist"}), 400
+
+        classifier_loaded = bool(app_state.load_classifier(model_path))
+        return jsonify({"classifier_loaded": classifier_loaded, "model_path": model_path})
+
+    @app.route("/classifier_status")
+    def get_classifier_status():
+        status = app_state.get_classifier_status()
+        return jsonify(
+            {
+                "classifier_loaded": bool(status.get("loaded", False)),
+                "model_path": status.get("model_path") or None,
+            }
+        )
+
     @app.route("/video_feed")
     def video_feed():
         return Response(
