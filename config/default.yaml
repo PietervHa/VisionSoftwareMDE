@@ -40,6 +40,8 @@ camera:
 object_detection:
   model_path: "models/yolov8n.pt"
   inference_size: 640
+  # Path to trained classifier model folder (e.g. models/classifier/final)
+  classifier_model_path: "./models/classifier/final"
 
 # HMI settings
 hmi:
