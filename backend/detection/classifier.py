@@ -19,12 +19,18 @@ class ImageClassifier:
         self.processor = None
 
         self._load()
-        logger.info("Classifier loaded: model_path=%s device=%s", self.model_path, self.device)
+        if self.is_loaded():
+            logger.info("Classifier loaded: model_path=%s device=%s", self.model_path, self.device)
+        else:
+            logger.warning("Classifier remains unloaded after load attempt: model_path=%s", self.model_path)
 
     def _load(self) -> None:
         model_dir = Path(self.model_path)
+        if not model_dir.is_absolute():
+            model_dir = (Path(__file__).resolve().parents[2] / model_dir).resolve()
+
         if not model_dir.exists():
-            logger.warning("Classifier model path not found: %s. Classifier will stay unloaded.", self.model_path)
+            logger.warning("Classifier model path not found: %s. Classifier will stay unloaded.", model_dir)
             self.model = None
             self.processor = None
             return
@@ -34,13 +40,15 @@ class ImageClassifier:
             from transformers import AutoImageProcessor, AutoModelForImageClassification
 
             self.device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
-            self.processor = AutoImageProcessor.from_pretrained(self.model_path)
-            self.model = AutoModelForImageClassification.from_pretrained(self.model_path)
+            model_dir_str = str(model_dir)
+            self.processor = AutoImageProcessor.from_pretrained(model_dir_str)
+            self.model = AutoModelForImageClassification.from_pretrained(model_dir_str)
             self.model.to(self.device)
             self.model.eval()
+            self.model_path = model_dir_str
         except FileNotFoundError as exc:
             raise RuntimeError(
-                f"Unable to load classifier assets from '{self.model_path}'. "
+                f"Unable to load classifier assets from '{model_dir}'. "
                 "Ensure required model files are present (for example config and weights)."
             ) from exc
 
