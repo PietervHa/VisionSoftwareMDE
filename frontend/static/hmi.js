@@ -25,12 +25,14 @@ async function updateResult() {
     try {
         const res = await fetch("/result");
         const data = await res.json();
+        const result = data.result || {};
+        const detections = Array.isArray(result.detections) ? result.detections : [];
 
         const statusEl = document.getElementById("status");
         const detEl = document.getElementById("detections");
         const dynamicLabelEl = document.getElementById("dynamicLabel");
 
-        if (data.result.status === "OK") {
+        if (result.status === "OK") {
             statusEl.textContent = "OK";
             statusEl.className = "status ok";
         } else {
@@ -42,29 +44,33 @@ async function updateResult() {
             ? "No words detected"
             : "No objects detected";
 
-        detEl.innerHTML = data.result.detections.length
-            ? data.result.detections
+        detEl.innerHTML = detections.length
+            ? detections
                 .map(d => {
-                    const value = VISION_MODE === "ocr" ? d.text : d.label;
-                    return `${value} (${(d.confidence * 100).toFixed(1)}%)`;
+                    const value = VISION_MODE === "ocr"
+                        ? (d.text || d.label || "-")
+                        : (d.label || d.text || "-");
+                    const confidence = Number(d.confidence ?? 0);
+                    return `${value} (${(confidence * 100).toFixed(1)}%)`;
                 })
                 .join("<br>")
             : noResultsText;
 
         if (dynamicLabelEl) {
             if (VISION_MODE === "ocr") {
-                dynamicLabelEl.textContent = data.result.searched_word || "-";
+                dynamicLabelEl.textContent = result.searched_word || "-";
             } else {
-                dynamicLabelEl.textContent = "-";
+                dynamicLabelEl.textContent = result.label || "-";
             }
         }
 
-        const timeValue = data.result.cycle_time_ms || data.result.processing_time_ms || 0;
+        const timeValue = result.cycle_time_ms || result.processing_time_ms || 0;
         document.getElementById("time").textContent = timeValue + " ms";
 
-        document.getElementById("okCount").textContent = data.counters.ok;
-        document.getElementById("nokCount").textContent = data.counters.nok;
-        document.getElementById("totalCount").textContent = data.counters.total;
+        const counters = data.counters || { ok: 0, nok: 0, total: 0 };
+        document.getElementById("okCount").textContent = counters.ok;
+        document.getElementById("nokCount").textContent = counters.nok;
+        document.getElementById("totalCount").textContent = counters.total;
 
     } catch (e) {
         console.error(e);
@@ -244,6 +250,8 @@ async function applyVisionMode(mode) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ vision_mode: mode })
         });
+
+        await updateResult();
     } catch (e) {
         console.error("Failed to sync vision mode:", e);
     }

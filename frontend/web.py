@@ -6,6 +6,13 @@ from pathlib import Path
 from backend.core.config_loader import cfg
 import time
 
+
+def _resolve_repo_path(path: str) -> Path:
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = Path(__file__).resolve().parents[1] / resolved
+    return resolved.resolve()
+
 def create_app(camera, app_state):
     app = Flask(__name__)
     CORS(app)
@@ -167,16 +174,13 @@ def create_app(camera, app_state):
         data = request.json or {}
         model_path = str(data.get("model_path", "")).strip()
 
-        root_dir = Path(__file__).resolve().parents[1]
-        resolved_path = Path(model_path)
-        if not resolved_path.is_absolute():
-            resolved_path = root_dir / resolved_path
+        resolved_path = _resolve_repo_path(model_path)
 
         if not model_path or not resolved_path.exists():
             return jsonify({"error": "model_path does not exist"}), 400
 
-        classifier_loaded = bool(app_state.load_classifier(model_path))
-        return jsonify({"classifier_loaded": classifier_loaded, "model_path": model_path})
+        classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
+        return jsonify({"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)})
 
     @app.route("/classifier_status")
     def get_classifier_status():
