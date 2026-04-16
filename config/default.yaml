@@ -53,15 +53,6 @@ object_detection:
         workspace: "pieters-workspace-kugm8"
         workflow: "detect-count-and-visualize"
         api_url: "https://serverless.roboflow.com"
-  # Legacy aliases kept for compatibility with older config files and code paths.
-  detector_backend: "roboflow"
-  use_remote_detector: true
-  use_cola_detector: true
-  roboflow_model: "cola_detectie"
-  roboflow_api_key: "SwXK94LMoGhQfZsk8xCG"
-  roboflow_workspace: "pieters-workspace-kugm8"
-  roboflow_workflow: "detect-count-and-visualize"
-  classifier_model_path: "./models/classifier/final"
 
 # HMI settings
 hmi:

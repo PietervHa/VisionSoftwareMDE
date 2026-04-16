@@ -18,25 +18,17 @@ class InspectionEngine:
         self._roboflow_client = None
 
         od_cfg = cfg.get("object_detection", {})
-        backend = str(od_cfg.get("backend", od_cfg.get("detector_backend", ""))).strip().lower()
-        if backend == "cola":
-            backend = "roboflow"
-        if not backend:
-            # Backward compatibility: previous config used only this boolean switch.
-            if bool(od_cfg.get("use_remote_detector", False)) or bool(od_cfg.get("use_cola_detector", False)):
-                backend = "roboflow"
-            else:
-                backend = "classifier"
+        backend = str(od_cfg.get("backend", "classifier")).strip().lower()
         if backend not in {"classifier", "roboflow", "yolo"}:
             logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
             backend = "classifier"
 
         self._detector_backend = backend
         roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
-        self._roboflow_model = str(od_cfg.get("roboflow_model", roboflow_cfg.get("model", "default"))).strip() or "default"
-        self._roboflow_workspace = str(od_cfg.get("roboflow_workspace", roboflow_cfg.get("workspace", ""))).strip()
-        self._roboflow_workflow = str(od_cfg.get("roboflow_workflow", roboflow_cfg.get("workflow", ""))).strip()
-        self._roboflow_api_url = str(od_cfg.get("roboflow_api_url", roboflow_cfg.get("api_url", "https://serverless.roboflow.com"))).strip()
+        self._roboflow_model = str(roboflow_cfg.get("model", "default")).strip() or "default"
+        self._roboflow_workspace = str(roboflow_cfg.get("workspace", "")).strip()
+        self._roboflow_workflow = str(roboflow_cfg.get("workflow", "")).strip()
+        self._roboflow_api_url = str(roboflow_cfg.get("api_url", "https://serverless.roboflow.com")).strip()
 
         if self._detector_backend == "roboflow":
             self._init_roboflow_detector()
@@ -44,7 +36,7 @@ class InspectionEngine:
     def _init_roboflow_detector(self) -> None:
         od_cfg = cfg.get("object_detection", {})
         roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
-        api_key = str(od_cfg.get("roboflow_api_key", roboflow_cfg.get("api_key", od_cfg.get("remote_detector_api_key", od_cfg.get("cola_api_key", ""))))).strip()
+        api_key = str(roboflow_cfg.get("api_key", "")).strip()
 
         if not api_key or not self._roboflow_workspace or not self._roboflow_workflow:
             logger.warning("Roboflow configuration is incomplete; detector will stay disabled")
