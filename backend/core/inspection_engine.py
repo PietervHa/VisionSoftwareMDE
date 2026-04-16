@@ -15,31 +15,40 @@ class InspectionEngine:
     def __init__(self, app_state):
         self.app_state = app_state
         self._classifier = None
-        self._cola_client = None
+        self._roboflow_client = None
 
         od_cfg = cfg.get("object_detection", {})
-        backend = str(od_cfg.get("detector_backend", "")).strip().lower()
+        backend = str(od_cfg.get("backend", od_cfg.get("detector_backend", ""))).strip().lower()
+        if backend == "cola":
+            backend = "roboflow"
         if not backend:
             # Backward compatibility: previous config used only this boolean switch.
-            backend = "cola" if bool(od_cfg.get("use_cola_detector", False)) else "classifier"
-        if backend not in {"classifier", "cola", "yolo"}:
+            if bool(od_cfg.get("use_remote_detector", False)) or bool(od_cfg.get("use_cola_detector", False)):
+                backend = "roboflow"
+            else:
+                backend = "classifier"
+        if backend not in {"classifier", "roboflow", "yolo"}:
             logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
             backend = "classifier"
 
         self._detector_backend = backend
-        self._cola_workspace = str(od_cfg.get("cola_workspace", "")).strip()
-        self._cola_workflow = str(od_cfg.get("cola_workflow", "")).strip()
+        roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
+        self._roboflow_model = str(od_cfg.get("roboflow_model", roboflow_cfg.get("model", "default"))).strip() or "default"
+        self._roboflow_workspace = str(od_cfg.get("roboflow_workspace", roboflow_cfg.get("workspace", ""))).strip()
+        self._roboflow_workflow = str(od_cfg.get("roboflow_workflow", roboflow_cfg.get("workflow", ""))).strip()
+        self._roboflow_api_url = str(od_cfg.get("roboflow_api_url", roboflow_cfg.get("api_url", "https://serverless.roboflow.com"))).strip()
 
-        if self._detector_backend == "cola":
-            self._init_cola_detector()
+        if self._detector_backend == "roboflow":
+            self._init_roboflow_detector()
 
-    def _init_cola_detector(self) -> None:
+    def _init_roboflow_detector(self) -> None:
         od_cfg = cfg.get("object_detection", {})
-        api_key = str(od_cfg.get("cola_api_key", "")).strip()
+        roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
+        api_key = str(od_cfg.get("roboflow_api_key", roboflow_cfg.get("api_key", od_cfg.get("remote_detector_api_key", od_cfg.get("cola_api_key", ""))))).strip()
 
-        if not api_key or not self._cola_workspace or not self._cola_workflow:
-            logger.warning("Cola Detector configuration is incomplete; detector will stay disabled")
-            self._cola_client = None
+        if not api_key or not self._roboflow_workspace or not self._roboflow_workflow:
+            logger.warning("Roboflow configuration is incomplete; detector will stay disabled")
+            self._roboflow_client = None
             return
 
         try:
@@ -47,24 +56,24 @@ class InspectionEngine:
 
             init_fn = getattr(InferenceHTTPClient, "init", None)
             if callable(init_fn):
-                self._cola_client = init_fn(
-                    api_url="https://serverless.roboflow.com",
+                self._roboflow_client = init_fn(
+                    api_url=self._roboflow_api_url,
                     api_key=api_key,
                 )
             else:
-                self._cola_client = InferenceHTTPClient(
-                    api_url="https://serverless.roboflow.com",
+                self._roboflow_client = InferenceHTTPClient(
+                    api_url=self._roboflow_api_url,
                     api_key=api_key,
                 )
 
-            logger.info("Cola Detector (Roboflow) initialized successfully")
+            logger.info("Roboflow detector initialized successfully: model=%s workspace=%s workflow=%s", self._roboflow_model, self._roboflow_workspace, self._roboflow_workflow)
         except Exception as exc:
-            logger.error("Failed to initialize Cola Detector: %s", exc)
-            self._cola_client = None
+            logger.error("Failed to initialize Roboflow detector: %s", exc)
+            self._roboflow_client = None
 
     def load_classifier(self, model_path: str) -> bool:
-        if self._detector_backend == "cola":
-            return self._cola_client is not None
+        if self._detector_backend == "roboflow":
+            return self._roboflow_client is not None
         if self._detector_backend == "yolo":
             # YOLO backend does not consume classifier model paths.
             return False
@@ -131,9 +140,9 @@ class InspectionEngine:
 
         return []
 
-    def _run_cola_workflow(self, frame):
-        if self._cola_client is None:
-            raise RuntimeError("cola_detector_unavailable")
+    def _run_roboflow_workflow(self, frame):
+        if self._roboflow_client is None:
+            raise RuntimeError("roboflow_detector_unavailable")
 
         fd, temp_path = tempfile.mkstemp(suffix=".jpg")
         os.close(fd)
@@ -144,9 +153,9 @@ class InspectionEngine:
             if not cv2.imwrite(temp_path, frame):
                 raise RuntimeError("failed_to_encode_frame")
 
-            return self._cola_client.run_workflow(
-                workspace_name=self._cola_workspace,
-                workflow_id=self._cola_workflow,
+            return self._roboflow_client.run_workflow(
+                workspace_name=self._roboflow_workspace,
+                workflow_id=self._roboflow_workflow,
                 images={"image": temp_path},
                 use_cache=False,
             )
@@ -156,8 +165,8 @@ class InspectionEngine:
             except OSError:
                 pass
 
-    def _evaluate_with_cola_detector(self, frame, start_time: float) -> dict:
-        raw_result = self._run_cola_workflow(frame)
+    def _evaluate_with_roboflow(self, frame, start_time: float) -> dict:
+        raw_result = self._run_roboflow_workflow(frame)
 
         payload: dict
         if isinstance(raw_result, list):
@@ -180,7 +189,8 @@ class InspectionEngine:
         processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
 
         logger.debug(
-            "Roboflow parsed payload: keys=%s predictions=%s best_confidence=%.3f threshold=%.3f",
+            "Roboflow parsed payload: model=%s keys=%s predictions=%s best_confidence=%.3f threshold=%.3f",
+            self._roboflow_model,
             sorted(payload.keys()) if isinstance(payload, dict) else [],
             len(predictions),
             best_confidence,
@@ -198,12 +208,12 @@ class InspectionEngine:
     def evaluate(self, frame) -> dict:
         start_time = time.perf_counter()
 
-        if self._detector_backend == "cola":
+        if self._detector_backend == "roboflow":
             try:
-                return self._evaluate_with_cola_detector(frame, start_time)
+                return self._evaluate_with_roboflow(frame, start_time)
             except Exception as exc:
                 processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
-                logger.error("Cola Detector evaluation failed: %s", exc)
+                logger.error("Roboflow evaluation failed: %s", exc)
                 return {
                     "status": "NOK",
                     "error": str(exc),
@@ -264,8 +274,8 @@ class InspectionEngine:
             }
 
     def has_model(self) -> bool:
-        if self._detector_backend == "cola":
-            return self._cola_client is not None
+        if self._detector_backend == "roboflow":
+            return self._roboflow_client is not None
         if self._detector_backend == "yolo":
             return True
         return self._classifier is not None and self._classifier.is_loaded()

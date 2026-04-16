@@ -35,9 +35,11 @@ def bind_app_state(app_state):
     _inspection_engine = InspectionEngine(app_state)
 
     od_cfg = cfg.get("object_detection", {})
-    backend = str(od_cfg.get("detector_backend", "")).strip().lower()
+    backend = str(od_cfg.get("backend", od_cfg.get("detector_backend", ""))).strip().lower()
+    if backend == "cola":
+        backend = "roboflow"
     if not backend:
-        backend = "cola" if bool(od_cfg.get("use_cola_detector", False)) else "classifier"
+        backend = "roboflow" if bool(od_cfg.get("use_remote_detector", False)) or bool(od_cfg.get("use_cola_detector", False)) else "classifier"
 
     # Best effort: auto-load classifier model only in classifier backend mode.
     if backend != "classifier":

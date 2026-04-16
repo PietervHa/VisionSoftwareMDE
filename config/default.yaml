@@ -38,19 +38,29 @@ camera:
 
 # Object detection settings
 object_detection:
-  # Active backend: "classifier" (local HF classifier), "cola" (Roboflow API), "yolo" (local YOLO model_path)
-  detector_backend: "cola"
+  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
+  backend: "roboflow"
   model_path: "models/yolov8n.pt"
   inference_size: 640
-  # Backward-compatibility fallback when detector_backend is not set.
-  # If true -> "cola", if false -> "classifier".
+  classifier:
+    model_path: "./models/classifier/final"
+  roboflow:
+    # Select which Roboflow profile to use from roboflow.models.
+    model: "cola_detectie"
+    models:
+      cola_detectie:
+        api_key: "SwXK94LMoGhQfZsk8xCG"
+        workspace: "pieters-workspace-kugm8"
+        workflow: "detect-count-and-visualize"
+        api_url: "https://serverless.roboflow.com"
+  # Legacy aliases kept for compatibility with older config files and code paths.
+  detector_backend: "roboflow"
+  use_remote_detector: true
   use_cola_detector: true
-  # Roboflow Cola Detection API configuration
-  cola_api_key: "SwXK94LMoGhQfZsk8xCG"
-  cola_workspace: "pieters-workspace-kugm8"
-  cola_workflow: "detect-count-and-visualize"
-  # Path to trained classifier model folder (kept for backward compatibility)
-  # Only used if use_cola_detector is false
+  roboflow_model: "cola_detectie"
+  roboflow_api_key: "SwXK94LMoGhQfZsk8xCG"
+  roboflow_workspace: "pieters-workspace-kugm8"
+  roboflow_workflow: "detect-count-and-visualize"
   classifier_model_path: "./models/classifier/final"
 
 # HMI settings
