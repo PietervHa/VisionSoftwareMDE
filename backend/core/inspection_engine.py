@@ -18,11 +18,19 @@ class InspectionEngine:
         self._cola_client = None
 
         od_cfg = cfg.get("object_detection", {})
-        self._use_cola_detector = bool(od_cfg.get("use_cola_detector", False))
+        backend = str(od_cfg.get("detector_backend", "")).strip().lower()
+        if not backend:
+            # Backward compatibility: previous config used only this boolean switch.
+            backend = "cola" if bool(od_cfg.get("use_cola_detector", False)) else "classifier"
+        if backend not in {"classifier", "cola", "yolo"}:
+            logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
+            backend = "classifier"
+
+        self._detector_backend = backend
         self._cola_workspace = str(od_cfg.get("cola_workspace", "")).strip()
         self._cola_workflow = str(od_cfg.get("cola_workflow", "")).strip()
 
-        if self._use_cola_detector:
+        if self._detector_backend == "cola":
             self._init_cola_detector()
 
     def _init_cola_detector(self) -> None:
@@ -55,9 +63,11 @@ class InspectionEngine:
             self._cola_client = None
 
     def load_classifier(self, model_path: str) -> bool:
-        if self._use_cola_detector:
-            # In cola mode we intentionally keep legacy classifier wiring untouched.
+        if self._detector_backend == "cola":
             return self._cola_client is not None
+        if self._detector_backend == "yolo":
+            # YOLO backend does not consume classifier model paths.
+            return False
 
         try:
             from backend.detection.classifier import ImageClassifier
@@ -188,12 +198,30 @@ class InspectionEngine:
     def evaluate(self, frame) -> dict:
         start_time = time.perf_counter()
 
-        if self._use_cola_detector:
+        if self._detector_backend == "cola":
             try:
                 return self._evaluate_with_cola_detector(frame, start_time)
             except Exception as exc:
                 processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 logger.error("Cola Detector evaluation failed: %s", exc)
+                return {
+                    "status": "NOK",
+                    "error": str(exc),
+                    "detections": [],
+                    "processing_time_ms": processing_time_ms,
+                    "mode": "object_detection",
+                }
+
+        if self._detector_backend == "yolo":
+            try:
+                from backend.detection.objectdetection import run_object_detection
+
+                result = run_object_detection(frame)
+                result.setdefault("mode", "object_detection")
+                return result
+            except Exception as exc:
+                processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error("YOLO evaluation failed: %s", exc)
                 return {
                     "status": "NOK",
                     "error": str(exc),
@@ -236,7 +264,9 @@ class InspectionEngine:
             }
 
     def has_model(self) -> bool:
-        if self._use_cola_detector:
+        if self._detector_backend == "cola":
             return self._cola_client is not None
+        if self._detector_backend == "yolo":
+            return True
         return self._classifier is not None and self._classifier.is_loaded()
 

@@ -34,7 +34,16 @@ def bind_app_state(app_state):
     ocr_instance = OCR(app_state=app_state)
     _inspection_engine = InspectionEngine(app_state)
 
-    # Best effort: auto-load configured classifier model if path exists.
+    od_cfg = cfg.get("object_detection", {})
+    backend = str(od_cfg.get("detector_backend", "")).strip().lower()
+    if not backend:
+        backend = "cola" if bool(od_cfg.get("use_cola_detector", False)) else "classifier"
+
+    # Best effort: auto-load classifier model only in classifier backend mode.
+    if backend != "classifier":
+        _sync_classifier_state("", False)
+        return
+
     model_path = cfg.get("object_detection", {}).get("classifier_model_path", "")
     if model_path:
         resolved = _resolve_model_path(model_path)

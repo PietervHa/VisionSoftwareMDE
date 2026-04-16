@@ -38,9 +38,12 @@ camera:
 
 # Object detection settings
 object_detection:
+  # Active backend: "classifier" (local HF classifier), "cola" (Roboflow API), "yolo" (local YOLO model_path)
+  detector_backend: "cola"
   model_path: "models/yolov8n.pt"
   inference_size: 640
-  # Set to true to use Cola Detection (Roboflow) model instead of classifier
+  # Backward-compatibility fallback when detector_backend is not set.
+  # If true -> "cola", if false -> "classifier".
   use_cola_detector: true
   # Roboflow Cola Detection API configuration
   cola_api_key: "SwXK94LMoGhQfZsk8xCG"
