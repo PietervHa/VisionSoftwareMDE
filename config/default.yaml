@@ -40,7 +40,14 @@ camera:
 object_detection:
   model_path: "models/yolov8n.pt"
   inference_size: 640
-  # Path to trained classifier model folder (e.g. models/classifier/final)
+  # Set to true to use Cola Detection (Roboflow) model instead of classifier
+  use_cola_detector: true
+  # Roboflow Cola Detection API configuration
+  cola_api_key: "SwXK94LMoGhQfZsk8xCG"
+  cola_workspace: "pieters-workspace-kugm8"
+  cola_workflow: "detect-count-and-visualize"
+  # Path to trained classifier model folder (kept for backward compatibility)
+  # Only used if use_cola_detector is false
   classifier_model_path: "./models/classifier/final"
 
 # HMI settings
