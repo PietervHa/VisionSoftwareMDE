@@ -118,7 +118,59 @@ def _normalize_object_detection_config(config: dict) -> dict:
     return config
 
 
+def _validate_object_detection_config(config: dict) -> None:
+    """Fail fast if Roboflow backend is selected but config is incomplete."""
+    od_cfg = config.get("object_detection", {})
+    if not isinstance(od_cfg, dict):
+        return
+
+    backend = str(od_cfg.get("backend", "classifier")).strip().lower()
+    if backend != "roboflow":
+        return
+
+    roboflow_cfg = od_cfg.get("roboflow", {})
+    if not isinstance(roboflow_cfg, dict):
+        raise ValueError("object_detection.roboflow must be a dict when backend='roboflow'")
+
+    selected_model = str(roboflow_cfg.get("model", "")).strip()
+    if not selected_model:
+        raise ValueError("object_detection.roboflow.model is required when backend='roboflow'")
+
+    roboflow_models = roboflow_cfg.get("models", {})
+    if not isinstance(roboflow_models, dict):
+        raise ValueError("object_detection.roboflow.models must be a dict")
+
+    if selected_model not in roboflow_models:
+        available = list(roboflow_models.keys())
+        raise ValueError(
+            f"Roboflow model '{selected_model}' not found in roboflow.models. "
+            f"Available models: {available}"
+        )
+
+    model_profile = roboflow_models[selected_model]
+    if not isinstance(model_profile, dict):
+        raise ValueError(f"roboflow.models.{selected_model} must be a dict")
+
+    required_fields = {"api_key", "workspace", "workflow"}
+    missing = required_fields - set(model_profile.keys())
+    if missing:
+        raise ValueError(
+            f"Roboflow model '{selected_model}' profile is incomplete. "
+            f"Missing required fields: {missing}. "
+            f"All of {required_fields} are required."
+        )
+
+    for field in required_fields:
+        value = str(model_profile.get(field, "")).strip()
+        if not value:
+            raise ValueError(
+                f"Roboflow model '{selected_model}' has empty required field '{field}'. "
+                f"All required fields must have non-empty values."
+            )
+
+
 # Load configuration at module level
 cfg = _load_config()
 cfg = _normalize_object_detection_config(cfg)
+_validate_object_detection_config(cfg)
 
