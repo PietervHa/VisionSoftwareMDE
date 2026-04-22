@@ -26,3 +26,4 @@ def preprocess_to_pil(frame: np.ndarray, size: int) -> Image.Image:
 
 
 __all__ = ["preprocess", "preprocess_to_pil"]
+

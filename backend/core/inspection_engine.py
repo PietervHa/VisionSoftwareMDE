@@ -6,7 +6,7 @@ import time
 import cv2
 
 from backend.core.config_loader import cfg
-from backend.detection.preprocessing import preprocess_to_pil
+from backend.detection.objectdetection.preprocessing import preprocess_to_pil
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,7 +71,7 @@ class InspectionEngine:
             return False
 
         try:
-            from backend.detection.classifier import ImageClassifier
+            from backend.detection.objectdetection.classifier import ImageClassifier
 
             classifier = ImageClassifier(model_path=model_path)
             if not classifier.is_loaded():
