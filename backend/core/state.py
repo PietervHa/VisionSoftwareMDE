@@ -19,6 +19,8 @@ class AppState:
         self.camera_rotation = 0  # steps: 0, 1, 2, 3 (each = 90° clockwise)
         self.vision_mode = cfg["vision_mode"]
         self.ocr_keyword = cfg["ocr"]["keywords"][0] if cfg["ocr"]["keywords"] else ""
+        self.classifier_model_path = ""
+        self.classifier_loaded = False
         self.set_threshold(float(cfg["confidence_threshold"]))
 
     def update_result(self, result: dict):
@@ -91,3 +93,36 @@ class AppState:
     def set_ocr_keyword(self, value: str):
         with self.lock:
             self.ocr_keyword = value.strip().lower()
+
+    def get_classifier_status(self) -> dict:
+        with self.lock:
+            return {
+                "loaded": self.classifier_loaded,
+                "model_path": self.classifier_model_path,
+            }
+
+    def set_classifier_loaded(self, path: str):
+        with self.lock:
+            self.classifier_loaded = bool(path)
+            self.classifier_model_path = path if path else ""
+
+    def load_classifier(self, model_path: str) -> bool:
+        model_path = (model_path or "").strip()
+        if not model_path:
+            self.set_classifier_loaded("")
+            return False
+
+        loaded = False
+        try:
+            # Keep state as orchestrator metadata; actual load happens in vision module.
+            from backend.core import vision
+
+            loader = getattr(vision, "load_classifier", None)
+            if callable(loader):
+                loaded = bool(loader(model_path))
+        except Exception:
+            loaded = False
+
+        self.set_classifier_loaded(model_path if loaded else "")
+        return loaded
+

@@ -6,6 +6,13 @@ from pathlib import Path
 from backend.core.config_loader import cfg
 import time
 
+
+def _resolve_repo_path(path: str) -> Path:
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = Path(__file__).resolve().parents[1] / resolved
+    return resolved.resolve()
+
 def create_app(camera, app_state):
     app = Flask(__name__)
     CORS(app)
@@ -158,6 +165,32 @@ def create_app(camera, app_state):
             return jsonify({"error": "ocr_keyword cannot be empty"}), 400
         app_state.set_ocr_keyword(new_keyword)
         return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+
+    @app.route("/load_classifier", methods=["POST"])
+    def load_classifier():
+        if not app_state.get_maintenance_mode():
+            return jsonify({"error": "Not in maintenance mode"}), 403
+
+        data = request.json or {}
+        model_path = str(data.get("model_path", "")).strip()
+
+        resolved_path = _resolve_repo_path(model_path)
+
+        if not model_path or not resolved_path.exists():
+            return jsonify({"error": "model_path does not exist"}), 400
+
+        classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
+        return jsonify({"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)})
+
+    @app.route("/classifier_status")
+    def get_classifier_status():
+        status = app_state.get_classifier_status()
+        return jsonify(
+            {
+                "classifier_loaded": bool(status.get("loaded", False)),
+                "model_path": status.get("model_path") or None,
+            }
+        )
 
     @app.route("/video_feed")
     def video_feed():

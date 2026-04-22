@@ -65,3 +65,5 @@ backend/**/__pycache__/
 frontend/**/__pycache__/
 tests/**/__pycache__/
 
+benchmarks/
+data/

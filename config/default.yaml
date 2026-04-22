@@ -38,8 +38,21 @@ camera:
 
 # Object detection settings
 object_detection:
+  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
+  backend: "roboflow"
   model_path: "models/yolov8n.pt"
   inference_size: 640
+  classifier:
+    model_path: "./models/classifier/final"
+  roboflow:
+    # Select which Roboflow profile to use from roboflow.models.
+    model: "cola_detectie"
+    models:
+      cola_detectie:
+        api_key: "SwXK94LMoGhQfZsk8xCG"
+        workspace: "pieters-workspace-kugm8"
+        workflow: "detect-count-and-visualize"
+        api_url: "https://serverless.roboflow.com"
 
 # HMI settings
 hmi:

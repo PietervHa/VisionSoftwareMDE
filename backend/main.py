@@ -10,7 +10,7 @@ from backend.utils.logger import setup_logging, get_logger
 from backend.output.result_writer import save_result
 
 log = get_logger(__name__)
-_vision_busy = False
+_vision_busy = threading.Event()
 
 def _process_vision_result(result, trigger_time, app_state):
     """Callback to handle vision results from background thread"""
@@ -19,17 +19,11 @@ def _process_vision_result(result, trigger_time, app_state):
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
 
         threshold = app_state.get_threshold()
-
-        high_conf = [
-            d for d in result["detections"]
-            if d["confidence"] >= threshold
-        ]
-
-        status = "OK" if high_conf else "NOK"
+        status = result["status"]
+        confidence = result.get("confidence", 0)
 
         result_dict = {
             **result,
-            "status": status,
             "confidence_threshold": threshold,
             "cycle_time_ms": cycle_time_ms  # Total time from trigger to result
         }
@@ -43,10 +37,10 @@ def _process_vision_result(result, trigger_time, app_state):
 
         detection_count = len(result.get("detections", []))
         log.info(
-            "VISION RESULT: status=%s cycle_time_ms=%s detections=%s",
+            "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s",
             status,
             cycle_time_ms,
-            detection_count,
+            confidence,
         )
     except Exception as exc:
         log.error("Failed to process vision result: %s", exc)
@@ -59,7 +53,7 @@ def vision_trigger_loop(camera, app_state):
         try:
             keyboard.wait("q")
 
-            if _vision_busy:
+            if _vision_busy.is_set():
                 continue
 
             frame = camera.get_frame()
@@ -75,15 +69,15 @@ def vision_trigger_loop(camera, app_state):
                 try:
                     _process_vision_result(result, trigger_time, app_state)
                 finally:
-                    _vision_busy = False
+                    _vision_busy.clear()
 
-            _vision_busy = True
+            _vision_busy.set()
 
             # Trigger vision in background thread with callback
             run_vision(frame, callback=_callback)
             log.debug("Vision processing started (non-blocking)")
         except Exception as exc:
-            _vision_busy = False
+            _vision_busy.clear()
             log.error("Vision trigger loop error: %s", exc)
 
 def main():

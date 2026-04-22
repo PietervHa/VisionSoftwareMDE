@@ -1,0 +1,274 @@
+from __future__ import annotations
+import os
+import tempfile
+import time
+
+import cv2
+
+from backend.core.config_loader import cfg
+from backend.detection.preprocessing import preprocess_to_pil
+from backend.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+class InspectionEngine:
+    def __init__(self, app_state):
+        self.app_state = app_state
+        self._classifier = None
+        self._roboflow_client = None
+
+        od_cfg = cfg.get("object_detection", {})
+        backend = str(od_cfg.get("backend", "classifier")).strip().lower()
+        if backend not in {"classifier", "roboflow", "yolo"}:
+            logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
+            backend = "classifier"
+
+        self._detector_backend = backend
+        roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
+        self._roboflow_model = str(roboflow_cfg.get("model", "default")).strip() or "default"
+        self._roboflow_workspace = str(roboflow_cfg.get("workspace", "")).strip()
+        self._roboflow_workflow = str(roboflow_cfg.get("workflow", "")).strip()
+        self._roboflow_api_url = str(roboflow_cfg.get("api_url", "https://serverless.roboflow.com")).strip()
+
+        if self._detector_backend == "roboflow":
+            self._init_roboflow_detector()
+
+    def _init_roboflow_detector(self) -> None:
+        od_cfg = cfg.get("object_detection", {})
+        roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
+        api_key = str(roboflow_cfg.get("api_key", "")).strip()
+
+        if not api_key or not self._roboflow_workspace or not self._roboflow_workflow:
+            logger.warning("Roboflow configuration is incomplete; detector will stay disabled")
+            self._roboflow_client = None
+            return
+
+        try:
+            from inference_sdk import InferenceHTTPClient
+
+            init_fn = getattr(InferenceHTTPClient, "init", None)
+            if callable(init_fn):
+                self._roboflow_client = init_fn(
+                    api_url=self._roboflow_api_url,
+                    api_key=api_key,
+                )
+            else:
+                self._roboflow_client = InferenceHTTPClient(
+                    api_url=self._roboflow_api_url,
+                    api_key=api_key,
+                )
+
+            logger.info("Roboflow detector initialized successfully: model=%s workspace=%s workflow=%s", self._roboflow_model, self._roboflow_workspace, self._roboflow_workflow)
+        except Exception as exc:
+            logger.error("Failed to initialize Roboflow detector: %s", exc)
+            self._roboflow_client = None
+
+    def load_classifier(self, model_path: str) -> bool:
+        if self._detector_backend == "roboflow":
+            return self._roboflow_client is not None
+        if self._detector_backend == "yolo":
+            # YOLO backend does not consume classifier model paths.
+            return False
+
+        try:
+            from backend.detection.classifier import ImageClassifier
+
+            classifier = ImageClassifier(model_path=model_path)
+            if not classifier.is_loaded():
+                logger.warning("Classifier could not be loaded: model_path=%s", model_path)
+                self._classifier = None
+                return False
+
+            self._classifier = classifier
+            return True
+        except Exception as exc:
+            logger.error("Failed to load classifier: model_path=%s error=%s", model_path, exc)
+            self._classifier = None
+            return False
+
+    @staticmethod
+    def _parse_detection_item(item: dict) -> dict:
+        label = str(
+            item.get("class")
+            or item.get("class_name")
+            or item.get("label")
+            or item.get("name")
+            or "unknown"
+        )
+
+        raw_conf = item.get("confidence", item.get("score", 0.0))
+        try:
+            confidence = float(raw_conf)
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        return {
+            "label": label,
+            "text": label,
+            "confidence": round(confidence, 3),
+        }
+
+    @staticmethod
+    def _extract_predictions(payload: dict) -> list:
+        direct = payload.get("predictions")
+        if isinstance(direct, list):
+            return [p for p in direct if isinstance(p, dict)]
+        if isinstance(direct, dict):
+            nested = direct.get("predictions")
+            if isinstance(nested, list):
+                return [p for p in nested if isinstance(p, dict)]
+
+        outputs = payload.get("outputs")
+        if isinstance(outputs, dict):
+            for value in outputs.values():
+                if isinstance(value, dict) and isinstance(value.get("predictions"), list):
+                    return [p for p in value["predictions"] if isinstance(p, dict)]
+                if isinstance(value, list):
+                    return [p for p in value if isinstance(p, dict)]
+        if isinstance(outputs, list):
+            for value in outputs:
+                if isinstance(value, dict) and isinstance(value.get("predictions"), list):
+                    return [p for p in value["predictions"] if isinstance(p, dict)]
+
+        return []
+
+    def _run_roboflow_workflow(self, frame):
+        if self._roboflow_client is None:
+            raise RuntimeError("roboflow_detector_unavailable")
+
+        fd, temp_path = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+
+        try:
+            if frame is None:
+                raise ValueError("empty_frame")
+            if not cv2.imwrite(temp_path, frame):
+                raise RuntimeError("failed_to_encode_frame")
+
+            return self._roboflow_client.run_workflow(
+                workspace_name=self._roboflow_workspace,
+                workflow_id=self._roboflow_workflow,
+                images={"image": temp_path},
+                use_cache=False,
+            )
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+    def _evaluate_with_roboflow(self, frame, start_time: float) -> dict:
+        raw_result = self._run_roboflow_workflow(frame)
+
+        payload: dict
+        if isinstance(raw_result, list):
+            logger.info("Roboflow returned a list with %s items", len(raw_result))
+            payload = raw_result[0] if raw_result and isinstance(raw_result[0], dict) else {}
+        elif isinstance(raw_result, dict):
+            payload = raw_result
+        else:
+            raise TypeError(f"Unsupported Roboflow response type: {type(raw_result).__name__}")
+
+        predictions = self._extract_predictions(payload)
+        detections = [self._parse_detection_item(item) for item in predictions]
+        best_confidence = max((d.get("confidence", 0.0) for d in detections), default=0.0)
+
+        try:
+            threshold = float(self.app_state.get_threshold())
+        except Exception:
+            threshold = 0.0
+
+        processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
+
+        logger.debug(
+            "Roboflow parsed payload: model=%s keys=%s predictions=%s best_confidence=%.3f threshold=%.3f",
+            self._roboflow_model,
+            sorted(payload.keys()) if isinstance(payload, dict) else [],
+            len(predictions),
+            best_confidence,
+            threshold,
+        )
+
+        return {
+            "status": "OK" if detections and best_confidence >= threshold else "NOK",
+            "detections": detections,
+            "confidence": round(best_confidence, 3),
+            "processing_time_ms": processing_time_ms,
+            "mode": "object_detection",
+        }
+
+    def evaluate(self, frame) -> dict:
+        start_time = time.perf_counter()
+
+        if self._detector_backend == "roboflow":
+            try:
+                return self._evaluate_with_roboflow(frame, start_time)
+            except Exception as exc:
+                processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error("Roboflow evaluation failed: %s", exc)
+                return {
+                    "status": "NOK",
+                    "error": str(exc),
+                    "detections": [],
+                    "processing_time_ms": processing_time_ms,
+                    "mode": "object_detection",
+                }
+
+        if self._detector_backend == "yolo":
+            try:
+                from backend.detection.objectdetection import run_object_detection
+
+                result = run_object_detection(frame)
+                result.setdefault("mode", "object_detection")
+                return result
+            except Exception as exc:
+                processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error("YOLO evaluation failed: %s", exc)
+                return {
+                    "status": "NOK",
+                    "error": str(exc),
+                    "detections": [],
+                    "processing_time_ms": processing_time_ms,
+                    "mode": "object_detection",
+                }
+
+        if self._classifier is None or not self._classifier.is_loaded():
+            return {
+                "status": "NOK",
+                "error": "no_model",
+                "detections": [],
+                "processing_time_ms": 0,
+            }
+
+        try:
+            pil_image = preprocess_to_pil(frame, size=224)
+            prediction = self._classifier.predict(pil_image)
+            threshold = self.app_state.get_threshold()
+            status = "OK" if prediction["confidence"] >= threshold and prediction["label"] == "ok" else "NOK"
+            processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
+
+            return {
+                "status": status,
+                "label": prediction["label"],
+                "confidence": prediction["confidence"],
+                "all_scores": prediction["all_scores"],
+                "processing_time_ms": processing_time_ms,
+                "mode": "object_detection",
+            }
+        except Exception as exc:
+            processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
+            logger.error("Inspection evaluation failed: %s", exc)
+            return {
+                "status": "NOK",
+                "error": str(exc),
+                "detections": [],
+                "processing_time_ms": processing_time_ms,
+            }
+
+    def has_model(self) -> bool:
+        if self._detector_backend == "roboflow":
+            return self._roboflow_client is not None
+        if self._detector_backend == "yolo":
+            return True
+        return self._classifier is not None and self._classifier.is_loaded()
+
