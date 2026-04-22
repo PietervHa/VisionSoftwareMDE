@@ -40,7 +40,7 @@ camera:
 object_detection:
   # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
   # Switch this to select which detection pipeline is used at runtime.
-  backend: "roboflow"
+  backend: "template"
 
   # Local YOLO weights path (used when backend is set to "yolo").
   model_path: "models/yolov8n.pt"
@@ -54,10 +54,13 @@ object_detection:
   template:
     # One or more reference images used for matching.
     references:
-      - "models/templates/reference_1.jpg"
+      - "data/templates/template1.png"
+      - "data/templates/template2.png"
+      - "data/templates/template3.png"
+      - "data/templates/template4.png"
     match_threshold: 0.6
     # Resize incoming ROI to reference dimensions before comparison.
-    resize_to_reference: true
+    resize_to_refertrues: true
 
   # Roboflow backend settings (used when backend is "roboflow").
   roboflow:

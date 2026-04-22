@@ -2,9 +2,8 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-
 import cv2
-
+from pathlib import Path
 from backend.core.config_loader import cfg
 from backend.detection.objectdetection.preprocessing import preprocess_to_pil
 from backend.utils.logger import get_logger
@@ -16,10 +15,11 @@ class InspectionEngine:
         self.app_state = app_state
         self._classifier = None
         self._roboflow_client = None
+        self._template_detector = None
 
         od_cfg = cfg.get("object_detection", {})
         backend = str(od_cfg.get("backend", "classifier")).strip().lower()
-        if backend not in {"classifier", "roboflow", "yolo"}:
+        if backend not in {"classifier", "roboflow", "yolo", "template"}:
             logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
             backend = "classifier"
 
@@ -32,6 +32,34 @@ class InspectionEngine:
 
         if self._detector_backend == "roboflow":
             self._init_roboflow_detector()
+        if self._detector_backend == "template":
+            self._init_template_detector()
+
+    def _init_template_detector(self):
+        od_cfg = cfg.get("object_detection", {})
+        template_cfg = od_cfg.get("template", {}) if isinstance(od_cfg.get("template"), dict) else {}
+        reference_paths = list(template_cfg.get("references", []))
+        match_threshold = float(template_cfg.get("match_threshold", 0.6))
+
+        resolved_paths = []
+        for reference_path in reference_paths:
+            path_obj = Path(reference_path)
+            if not path_obj.is_absolute():
+                path_obj = Path(__file__).resolve().parents[2] / path_obj
+            resolved_paths.append(str(path_obj.resolve()))
+
+        try:
+            from backend.detection.objectdetection.template_detector import TemplateDetector
+
+            self._template_detector = TemplateDetector(resolved_paths, match_threshold=match_threshold)
+            logger.info(
+                "Template detector initialized successfully: references=%s match_threshold=%.3f",
+                len(resolved_paths),
+                match_threshold,
+            )
+        except Exception as exc:
+            logger.error("Failed to initialize template detector: %s", exc)
+            self._template_detector = None
 
     def _init_roboflow_detector(self) -> None:
         od_cfg = cfg.get("object_detection", {})
@@ -232,6 +260,22 @@ class InspectionEngine:
                     "mode": "object_detection",
                 }
 
+        if self._detector_backend == "template":
+            try:
+                result = self._template_detector.detect(frame)
+                result.setdefault("mode", "object_detection")
+                return result
+            except Exception as exc:
+                processing_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                logger.error("Template evaluation failed: %s", exc)
+                return {
+                    "status": "NOK",
+                    "error": str(exc),
+                    "detections": [],
+                    "processing_time_ms": processing_time_ms,
+                    "mode": "object_detection",
+                }
+
         if self._classifier is None or not self._classifier.is_loaded():
             return {
                 "status": "NOK",
@@ -270,5 +314,7 @@ class InspectionEngine:
             return self._roboflow_client is not None
         if self._detector_backend == "yolo":
             return True
+        if self._detector_backend == "template":
+            return self._template_detector is not None and self._template_detector.is_loaded()
         return self._classifier is not None and self._classifier.is_loaded()
 
