@@ -76,6 +76,8 @@ class TemplateDetector:
                     )
                     continue
 
+                if crop.shape != ref_gray.shape:
+                    crop = cv2.resize(crop, (ref_gray.shape[1], ref_gray.shape[0]), interpolation=cv2.INTER_LINEAR)
                 ssim_score = float(ssim_fn(crop, ref_gray, data_range=255))
                 candidates.append(
                     {
@@ -109,6 +111,7 @@ class TemplateDetector:
                 "processing_time_ms": elapsed_ms,
             }
         except Exception as exc:
+            self.logger.error("TemplateDetector.detect() failed: %s", exc, exc_info=True)
             elapsed_ms = float((time.perf_counter() - start) * 1000.0)
             return {
                 "status": "NOK",
