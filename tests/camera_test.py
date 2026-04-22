@@ -11,7 +11,7 @@ def main() -> None:
 
     try:
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 640, 640)
+        cv2.resizeWindow(window_name, 320, 320)
         while True:
             frame = camera.get_frame()
             if frame is not None:

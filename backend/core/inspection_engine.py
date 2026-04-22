@@ -24,6 +24,7 @@ class InspectionEngine:
             backend = "classifier"
 
         self._detector_backend = backend
+        logger.info("Object detection backend selected: %s", self._detector_backend)
         roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
         self._roboflow_model = str(roboflow_cfg.get("model", "default")).strip() or "default"
         self._roboflow_workspace = str(roboflow_cfg.get("workspace", "")).strip()
