@@ -5,6 +5,7 @@ from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 
 log = get_logger(__name__)
+TARGET = 1 / 30  # Target time per frame for ~30 FPS
 
 class Camera:
     def __init__(self, index=0, app_state=None):  # <- change index
@@ -33,8 +34,10 @@ class Camera:
         t = threading.Thread(target=self._update, daemon=True)
         t.start()
 
+
     def _update(self):
         while self.running:
+            t0 = time.perf_counter()
             ret, frame = self.cap.read()
             if ret:
                 # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
@@ -51,11 +54,16 @@ class Camera:
                     self.latest_frame = frame
             else:
                 log.warning("Camera frame read failed")
-            time.sleep(1/30)
+            elapsed = time.perf_counter() - t0
+            remaining = TARGET - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
 
     def get_frame(self):
         with self.lock:
             return None if self.latest_frame is None else self.latest_frame.copy()
+
 
     def release(self):
         log.info("Camera release called")
