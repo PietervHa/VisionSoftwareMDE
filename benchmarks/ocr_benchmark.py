@@ -1,4 +1,5 @@
 import argparse
+from collections import deque
 import json
 import math
 import statistics
@@ -33,13 +34,20 @@ class OCRBenchmark:
         self.completed_count = 0
         self.error_count = 0
         self._inflight = 0
+        self._recent = deque(maxlen=10)
+        self._recent_proc_sum = 0.0
+        self._recent_cycle_sum = 0.0
+        self._recent_det_sum = 0
 
     def _on_vision_result(self, result, trigger_time, frame_num):
         """Callback to handle async OCR results."""
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 2)
         processing_time_ms = float(result.get("processing_time_ms", 0.0))
         detections = result.get("detections", [])
+        detection_count = len(detections)
         error_message = result.get("error")
+        error_to_log = None
+        debug_to_log = None
 
         with self.lock:
             self.results.append(
@@ -47,32 +55,47 @@ class OCRBenchmark:
                     "frame_num": frame_num,
                     "cycle_time_ms": cycle_time_ms,
                     "processing_time_ms": processing_time_ms,
-                    "detection_count": len(detections),
+                    "detection_count": detection_count,
                     "error": error_message,
                 }
             )
             self.completed_count += 1
             if error_message:
                 self.error_count += 1
-                log.error("Frame %s OCR error: %s", frame_num, error_message)
+                error_to_log = (frame_num, error_message)
             self._inflight = max(0, self._inflight - 1)
 
+            if len(self._recent) == self._recent.maxlen:
+                old_proc, old_cycle, old_det = self._recent[0]
+                self._recent_proc_sum -= old_proc
+                self._recent_cycle_sum -= old_cycle
+                self._recent_det_sum -= old_det
+
+            self._recent.append((processing_time_ms, cycle_time_ms, detection_count))
+            self._recent_proc_sum += processing_time_ms
+            self._recent_cycle_sum += cycle_time_ms
+            self._recent_det_sum += detection_count
+
             completed_frames = self.completed_count
-            if completed_frames % 10 == 0:
-                last_10 = self.results[-10:]
-                avg_proc = math.ceil(sum(r["processing_time_ms"] for r in last_10) / len(last_10))
-                avg_cycle = math.ceil(sum(r["cycle_time_ms"] for r in last_10) / len(last_10))
-                total_detections = sum(r["detection_count"] for r in last_10)
+            if completed_frames % 10 == 0 and len(self._recent) == 10:
+                avg_proc = math.ceil(self._recent_proc_sum / 10)
+                avg_cycle = math.ceil(self._recent_cycle_sum / 10)
+                total_detections = self._recent_det_sum
                 batch_start = completed_frames - 9
                 batch_end = completed_frames
-                log.debug(
-                    "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
-                    batch_start,
-                    batch_end,
-                    avg_proc,
-                    avg_cycle,
-                    total_detections,
-                )
+                debug_to_log = (batch_start, batch_end, avg_proc, avg_cycle, total_detections)
+
+        if error_to_log:
+            log.error("Frame %s OCR error: %s", error_to_log[0], error_to_log[1])
+        if debug_to_log:
+            log.debug(
+                "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
+                debug_to_log[0],
+                debug_to_log[1],
+                debug_to_log[2],
+                debug_to_log[3],
+                debug_to_log[4],
+            )
 
     def run_benchmark(self, camera):
         log.info("Starting OCR Benchmark (%s seconds)...", self.duration)
@@ -84,10 +107,14 @@ class OCRBenchmark:
         self.completed_count = 0
         self.error_count = 0
         self._inflight = 0
+        self._recent.clear()
+        self._recent_proc_sum = 0.0
+        self._recent_cycle_sum = 0.0
+        self._recent_det_sum = 0
+        deadline = self.start_time + self.duration
 
         while self.running:
-            elapsed = time.perf_counter() - self.start_time
-            if elapsed >= self.duration:
+            if time.perf_counter() >= deadline:
                 self.running = False
                 break
 
@@ -96,20 +123,23 @@ class OCRBenchmark:
                 continue
 
             self.frame_count += 1
+            slot_acquired = False
 
             # Apply backpressure to avoid unlimited OCR worker buildup.
             while True:
                 with self.lock:
                     if self._inflight < self.max_inflight:
                         self._inflight += 1
+                        slot_acquired = True
                         break
-                if (time.perf_counter() - self.start_time) >= self.duration:
+                if time.perf_counter() >= deadline:
                     break
                 time.sleep(0.001)
 
-            if (time.perf_counter() - self.start_time) >= self.duration:
-                with self.lock:
-                    self._inflight = max(0, self._inflight - 1)
+            if time.perf_counter() >= deadline:
+                if slot_acquired:
+                    with self.lock:
+                        self._inflight = max(0, self._inflight - 1)
                 self.frame_count -= 1
                 break
 
