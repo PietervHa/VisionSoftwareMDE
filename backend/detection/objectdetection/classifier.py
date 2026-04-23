@@ -27,7 +27,7 @@ class ImageClassifier:
     def _load(self) -> None:
         model_dir = Path(self.model_path)
         if not model_dir.is_absolute():
-            model_dir = (Path(__file__).resolve().parents[2] / model_dir).resolve()
+            model_dir = (Path(__file__).resolve().parents[3] / model_dir).resolve()
 
         if not model_dir.exists():
             logger.warning("Classifier model path not found: %s. Classifier will stay unloaded.", model_dir)
@@ -90,3 +90,4 @@ class ImageClassifier:
 
     def is_loaded(self) -> bool:
         return self.model is not None
+

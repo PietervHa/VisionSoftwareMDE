@@ -3,8 +3,8 @@ import numpy as np
 from PIL import Image
 from backend.core.inspection_engine import InspectionEngine
 from backend.core.state import AppState
-from backend.detection.classifier import ImageClassifier
-from backend.detection.preprocessing import preprocess, preprocess_to_pil
+from backend.detection.objectdetection.classifier import ImageClassifier
+from backend.detection.objectdetection.preprocessing import preprocess, preprocess_to_pil
 
 
 TOTAL_TESTS = 5

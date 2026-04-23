@@ -117,3 +117,4 @@ def run_object_detection(frame):
         "processing_time_ms": duration_ms,
         "mode": "object_detection"
     }
+

@@ -2,7 +2,7 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection"
+vision_mode: "object_detection"  # valid values: "ocr" (default, backward compatible), "object_detection"
 machine_id: "default"
 confidence_threshold: 0.8
 
@@ -39,11 +39,36 @@ camera:
 # Object detection settings
 object_detection:
   # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
-  backend: "roboflow"
+  # Switch this to select which detection pipeline is used at runtime.
+  backend: "template"
+
+  # Local YOLO weights path (used when backend is set to "yolo").
   model_path: "models/yolov8n.pt"
   inference_size: 640
+
+  # Classifier backend settings (used when backend is "classifier").
   classifier:
     model_path: "./models/classifier/final"
+
+  # Template matching backend settings.
+  template:
+    # One or more reference images used for matching.
+    references:
+      - "data/templates/template_1776865591718.jpg"
+      - "data/templates/template_1776865591718_scale0_85.jpg"
+      - "data/templates/template_1776865591718_scale1_15.jpg"
+      - "data/templates/template_1776865611958.jpg"
+      - "data/templates/template_1776865611958_scale0_85.jpg"
+      - "data/templates/template_1776865611958_scale1_15.jpg"
+      - "data/templates/template_1776865627067.jpg"
+      - "data/templates/template_1776865627067_scale0_85.jpg"
+      - "data/templates/template_1776865627067_scale1_15.jpg"
+    match_threshold: 0.6
+    display_label: "boterbloempje"
+    # Resize incoming ROI to reference dimensions before comparison.
+    resize_to_refertrues: true
+
+  # Roboflow backend settings (used when backend is "roboflow").
   roboflow:
     # Select which Roboflow profile to use from roboflow.models.
     model: "cola_detectie"

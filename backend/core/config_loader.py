@@ -75,7 +75,7 @@ def _normalize_object_detection_config(config: dict) -> dict:
     roboflow_cfg = _as_dict(normalized.get("roboflow"))
 
     backend = str(_first_non_empty(normalized.get("backend"), default="classifier")).strip().lower()
-    if backend not in {"classifier", "roboflow", "yolo"}:
+    if backend not in {"classifier", "roboflow", "yolo", "template"}:
         backend = "classifier"
 
     normalized["backend"] = backend
