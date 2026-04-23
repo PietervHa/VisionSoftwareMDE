@@ -1,6 +1,7 @@
 import cv2
 import threading
 import time
+import sys
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 
@@ -10,8 +11,9 @@ TARGET = 1 / 30  # Target time per frame for ~30 FPS
 class Camera:
     def __init__(self, index=0, app_state=None):  # <- change index
         cam_cfg = cfg["camera"]
+        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
         self.app_state = app_state
-        self.cap = cv2.VideoCapture(cam_cfg["index"], cv2.CAP_DSHOW)
+        self.cap = cv2.VideoCapture(cam_cfg["index"], backend)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
