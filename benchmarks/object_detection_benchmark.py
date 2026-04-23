@@ -7,13 +7,37 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-
 from backend.core.camera import Camera
 from backend.core.config_loader import cfg
+from backend.core.state import AppState
 from backend.utils.logger import setup_logging, get_logger
 from backend.core import vision
 
 log = get_logger(__name__)
+
+OBJECT_DETECTION_MODE_ALIASES = {"object_detection", "classifier", "roboflow", "template", "yolo"}
+
+
+def _prepare_object_detection_mode():
+    configured_mode = str(cfg.get("vision_mode", "")).strip().lower()
+    od_cfg = cfg.get("object_detection", {})
+    backend = str(od_cfg.get("backend", "classifier")).strip().lower() if isinstance(od_cfg, dict) else "classifier"
+
+    if configured_mode == "ocr":
+        return False, configured_mode, backend
+
+    if configured_mode in OBJECT_DETECTION_MODE_ALIASES:
+        # Dispatcher routes OD through canonical mode, backend chooses implementation.
+        if configured_mode != "object_detection":
+            log.warning(
+                "vision_mode '%s' is treated as 'object_detection' for benchmarking (backend=%s).",
+                configured_mode,
+                backend,
+            )
+        cfg["vision_mode"] = "object_detection"
+        return True, configured_mode, backend
+
+    return False, configured_mode, backend
 
 class ObjectDetectionBenchmark:
     """
@@ -267,10 +291,21 @@ def main():
     setup_logging()
     args = parse_args()
 
-    if cfg["vision_mode"] != "object_detection":
-        print("WARNING: config vision_mode is not 'object_detection'.")
-        print("Set vision_mode: object_detection in config/default.yaml to benchmark OD.")
+    can_run, configured_mode, backend = _prepare_object_detection_mode()
+    if not can_run:
+        print("WARNING: config vision_mode is not an object-detection mode.")
+        print(
+            "Set vision_mode: object_detection (preferred) or a compatible alias "
+            "(roboflow/template/yolo/classifier) in config/default.yaml."
+        )
+        print(f"Current vision_mode: {configured_mode}")
         sys.exit(1)
+
+    log.info("Object detection benchmark backend: %s", backend)
+
+    # Mirror production startup so vision dispatch has an initialized inspection engine.
+    app_state = AppState()
+    vision.bind_app_state(app_state)
 
     camera = Camera(0)
     benchmark = ObjectDetectionBenchmark(
