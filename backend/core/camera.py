@@ -11,6 +11,7 @@ class Camera:
         cam_cfg = cfg["camera"]
         self.app_state = app_state
         self.cap = cv2.VideoCapture(cam_cfg["index"], cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
