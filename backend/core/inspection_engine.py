@@ -41,6 +41,7 @@ class InspectionEngine:
         template_cfg = od_cfg.get("template", {}) if isinstance(od_cfg.get("template"), dict) else {}
         reference_paths = list(template_cfg.get("references", []))
         match_threshold = float(template_cfg.get("match_threshold", 0.6))
+        display_label = str(template_cfg.get("display_label", "")).strip()
 
         resolved_paths = []
         for reference_path in reference_paths:
@@ -52,11 +53,16 @@ class InspectionEngine:
         try:
             from backend.detection.objectdetection.template_detector import TemplateDetector
 
-            self._template_detector = TemplateDetector(resolved_paths, match_threshold=match_threshold)
+            self._template_detector = TemplateDetector(
+                resolved_paths,
+                match_threshold=match_threshold,
+                display_label=display_label,
+            )
             logger.info(
-                "Template detector initialized successfully: references=%s match_threshold=%.3f",
+                "Template detector initialized successfully: references=%s match_threshold=%.3f label=%s",
                 len(resolved_paths),
                 match_threshold,
+                display_label,
             )
         except Exception as exc:
             logger.error("Failed to initialize template detector: %s", exc)

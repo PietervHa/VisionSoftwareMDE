@@ -12,9 +12,10 @@ except Exception:
 
 
 class TemplateDetector:
-    def __init__(self, reference_paths: list[str], match_threshold: float = 0.6):
+    def __init__(self, reference_paths: list[str], match_threshold: float = 0.6, display_label: str = ""):
         self.logger = get_logger(__name__)
         self.match_threshold = float(match_threshold)
+        self.display_label = str(display_label).strip()
         self.references: list[dict] = []
 
         for reference_path in reference_paths:
@@ -134,10 +135,10 @@ class TemplateDetector:
             return {
                 "status": "OK" if best_ssim >= self.match_threshold else "NOK",
                 "confidence": round(best_ssim, 3),
+                "label": self.display_label,
                 "detections": [
                     {
-                        #change label to match the product
-                        "label": "Zwarte bout",
+                        "label": self.display_label,
                         "confidence": round(best_ssim, 3),
                         "text": "template_match",
                     }

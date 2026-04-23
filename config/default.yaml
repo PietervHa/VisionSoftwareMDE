@@ -2,7 +2,7 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection"
+vision_mode: "object_detection"  # valid values: "ocr" (default, backward compatible), "object_detection"
 machine_id: "default"
 confidence_threshold: 0.8
 
@@ -64,6 +64,7 @@ object_detection:
       - "data/templates/template_1776865627067_scale0_85.jpg"
       - "data/templates/template_1776865627067_scale1_15.jpg"
     match_threshold: 0.6
+    display_label: "boterbloempje"
     # Resize incoming ROI to reference dimensions before comparison.
     resize_to_refertrues: true
 
