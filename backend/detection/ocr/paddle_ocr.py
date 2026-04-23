@@ -30,6 +30,7 @@ class PaddleOCR:
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
         self.min_dim = int(ocr_cfg["min_dim"])
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         log.debug(
             "PaddleOCR init: preprocess_mode=%s downscale=%s keywords=%s",
             self.preprocess_mode,
@@ -55,8 +56,7 @@ class PaddleOCR:
             return binary
 
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
+        enhanced = self._clahe.apply(gray)
 
         # Slight blur to reduce noise
         denoised = cv2.medianBlur(enhanced, 3)
