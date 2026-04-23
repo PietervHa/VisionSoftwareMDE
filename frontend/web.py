@@ -82,7 +82,9 @@ def create_app(camera, app_state):
             if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr":
                 frame_for_stream = _draw_roi(frame.copy())
 
-            _, buffer = cv2.imencode(".jpg", frame_for_stream)
+            JPEG_Q = cfg.get("hmi", {}).get("stream_quality", 75)
+            _, buffer = cv2.imencode(".jpg", frame_for_stream,
+                                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_Q])
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n"
