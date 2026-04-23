@@ -1,11 +1,15 @@
+from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Optional
-from backend.detection.objectdetection import run_object_detection
-from backend.detection.ocr import OCR
-import threading
-import time
 from backend.core.config_loader import cfg
 from backend.core.inspection_engine import InspectionEngine
+from backend.detection.objectdetection import run_object_detection
+from backend.detection.ocr import OCR
+from backend.utils.logger import get_logger
+import time
+
+logger = get_logger(__name__)
 
 # Backward-compatible alias; primary source is cfg["vision_mode"].
 VISION_MODE = cfg["vision_mode"]
@@ -13,6 +17,8 @@ VISION_MODE = cfg["vision_mode"]
 ocr_instance = OCR()
 _inspection_engine: Optional[InspectionEngine] = None
 _app_state: Optional[Any] = None
+
+_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision_worker")
 
 
 def _resolve_model_path(model_path: str) -> Path:
@@ -28,7 +34,8 @@ def _sync_classifier_state(model_path: str, loaded: bool) -> None:
         return
     app_state.set_classifier_loaded(model_path if loaded else "")
 
-def bind_app_state(app_state):
+
+def bind_app_state(app_state) -> None:
     global ocr_instance, _inspection_engine, _app_state
     _app_state = app_state
     ocr_instance = OCR(app_state=app_state)
@@ -51,6 +58,7 @@ def bind_app_state(app_state):
             _sync_classifier_state(str(resolved), loaded)
         else:
             _sync_classifier_state("", False)
+
 
 def load_classifier(model_path: str) -> bool:
     engine = _inspection_engine
@@ -111,6 +119,7 @@ def _extract_confidence(normalized: dict) -> float:
             best = conf
     return best
 
+
 def _normalize_result(result: dict, mode: str) -> dict:
     normalized = dict(result or {})
     normalized.setdefault("mode", mode)
@@ -134,6 +143,7 @@ def _normalize_result(result: dict, mode: str) -> dict:
 
     return normalized
 
+
 def _run_object_detection(frame):
     engine = _inspection_engine
     if engine is None:
@@ -144,14 +154,15 @@ def _run_object_detection(frame):
         return legacy
     return engine.evaluate(frame)
 
-def _run_with_callback(fn, frame, callback, mode):
-    # Keep vision trigger loop non-blocking by running inference in a daemon worker.
+
+def _run_with_callback(fn, frame, callback, mode: str) -> None:
     def worker():
         start = time.perf_counter()
         try:
             result = fn(frame)
         except Exception as exc:
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            logger.error("Vision worker exception: %s", exc)
             result = {
                 "status": "NOK",
                 "detections": [],
@@ -162,18 +173,10 @@ def _run_with_callback(fn, frame, callback, mode):
 
         callback(_normalize_result(result, mode))
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
+    _pool.submit(worker)
+
 
 def run_vision(frame, callback=None):
-    """
-    Dispatcher function that routes to OCR or object detection
-    based on VISION_MODE configuration.
-
-    If callback is provided, runs selected vision mode in a background thread.
-    Otherwise, runs synchronously.
-
-    """
     mode_getter = getattr(_app_state, "get_vision_mode", None)
     mode = mode_getter() if callable(mode_getter) else cfg["vision_mode"]
 
