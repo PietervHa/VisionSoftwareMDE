@@ -23,7 +23,9 @@ class TesseractOCR:
         if ocr_cfg["disable_dawgs"]:
             self.tesseract_config += " -c load_system_dawg=0 -c load_freq_dawg=0"
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
+        self.keyword_set = set(self.keywords)
         self.date_regex = ocr_cfg["date_regex"]
+        self._date_pattern = re.compile(self.date_regex) if self.date_regex else None
         self.debug_draw_roi = cfg["hmi"]["debug_draw_roi"]
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
@@ -106,11 +108,12 @@ class TesseractOCR:
 
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
-        gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY) if len(roi_frame.shape) == 3 else roi_frame
         keywords = (
             [self.app_state.get_ocr_keyword()]
             if self.app_state else self.keywords
         )
+        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
 
         gray = self._downscale_roi(gray)
 
@@ -129,17 +132,25 @@ class TesseractOCR:
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         detections = []
+        texts = data.get("text", [])
+        confs = data.get("conf", [])
 
-        for i, text in enumerate(data["text"]):
+        for i, text in enumerate(texts):
             if not text.strip():
                 continue
 
-            conf = int(data["conf"][i])
+            try:
+                conf = float(confs[i])
+            except (TypeError, ValueError, IndexError):
+                conf = -1.0
+            if conf < 0:
+                continue
+
             word = text.lower()
 
             # Filter by keywords/regex if defined
-            if keywords and word not in keywords:
-                if self.date_regex and not re.search(self.date_regex, text):
+            if keyword_set and word not in keyword_set:
+                if self._date_pattern and not self._date_pattern.search(text):
                     continue
 
             detections.append({
