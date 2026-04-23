@@ -87,6 +87,8 @@ class TemplateDetector:
 
                 match = cv2.matchTemplate(frame_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(match)
+                if max_val < self.match_threshold * 0.7:
+                    continue  # skip SSIM — no chance of passing
 
                 x, y = max_loc
                 crop = frame_gray[y : y + ref_h, x : x + ref_w]
