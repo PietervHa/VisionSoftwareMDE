@@ -35,6 +35,26 @@ class TemplateDetector:
         if not self.references:
             raise RuntimeError("No template references loaded successfully.")
 
+    @staticmethod
+    def _prepare_gray_for_ssim(image: np.ndarray) -> np.ndarray:
+        """Return a 2D uint8 grayscale image suitable for SSIM."""
+        if image is None:
+            raise ValueError("Image is None")
+
+        img = np.asarray(image)
+        if img.ndim == 3 and img.shape[2] == 1:
+            img = img[:, :, 0]
+        elif img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        elif img.ndim != 2:
+            raise ValueError(f"Unsupported image shape for SSIM: {img.shape}")
+
+        if img.dtype != np.uint8:
+            img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
+            img = img.astype(np.uint8)
+
+        return np.ascontiguousarray(img)
+
     def detect(self, frame: np.ndarray) -> dict:
         start = time.perf_counter()
 
@@ -49,7 +69,7 @@ class TemplateDetector:
 
             candidates = []
             for reference in self.references:
-                ref_gray = reference["image"]
+                ref_gray = self._prepare_gray_for_ssim(reference["image"])
                 ref_h, ref_w = ref_gray.shape[:2]
                 frm_h, frm_w = frame_gray.shape[:2]
 
@@ -70,15 +90,30 @@ class TemplateDetector:
                 x, y = max_loc
                 crop = frame_gray[y : y + ref_h, x : x + ref_w]
                 if crop.shape[:2] != ref_gray.shape[:2]:
+                    crop = cv2.resize(crop, (ref_gray.shape[1], ref_gray.shape[0]),
+                                      interpolation=cv2.INTER_LINEAR)
+                crop = self._prepare_gray_for_ssim(crop)
+
+                if crop.shape != ref_gray.shape:
                     self.logger.warning(
-                        "Cropped region shape mismatch for reference %s, skipping",
+                        "Skipping SSIM for %s due to shape mismatch crop=%s ref=%s",
                         reference["path"],
+                        crop.shape,
+                        ref_gray.shape,
                     )
                     continue
 
-                if crop.shape != ref_gray.shape:
-                    crop = cv2.resize(crop, (ref_gray.shape[1], ref_gray.shape[0]), interpolation=cv2.INTER_LINEAR)
-                ssim_score = float(ssim_fn(crop, ref_gray, data_range=255))
+                try:
+                    ssim_score = float(ssim_fn(crop, ref_gray, data_range=255))
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping SSIM for %s: %s (crop=%s ref=%s)",
+                        reference["path"],
+                        exc,
+                        crop.shape,
+                        ref_gray.shape,
+                    )
+                    continue
                 candidates.append(
                     {
                         "match_score": float(max_val),
@@ -101,7 +136,8 @@ class TemplateDetector:
                 "confidence": round(best_ssim, 3),
                 "detections": [
                     {
-                        "label": "template_match",
+                        #change label to match the product
+                        "label": "Zwarte bout",
                         "confidence": round(best_ssim, 3),
                         "text": "template_match",
                     }
