@@ -22,7 +22,7 @@ class OCRBenchmark:
     Uses the same async callback pattern as main.py.
     """
 
-    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=4):
+    def __init__(self, duration_seconds=30, flush_wait_seconds=2.0, max_inflight=1):
         self.duration = duration_seconds
         self.flush_wait_seconds = flush_wait_seconds
         self.max_inflight = max_inflight
@@ -288,7 +288,7 @@ def parse_args():
     parser.add_argument(
         "--max-inflight",
         type=int,
-        default=4,
+        default=1,
         help="Maximum in-flight async OCR jobs",
     )
     return parser.parse_args()
