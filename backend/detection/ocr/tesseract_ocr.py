@@ -4,15 +4,17 @@ import re
 import time
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
+from backend.utils.roi import apply_roi, draw_roi
 
 log = get_logger(__name__)
 
 pytesseract.pytesseract.tesseract_cmd = cfg["ocr"]["tesseract_path"]
 
+
 class TesseractOCR:
     def __init__(self, app_state=None):
         self.app_state = app_state
-        self.languages = "eng"  # Only English for speed
+        self.languages = "eng"
         ocr_cfg = cfg["ocr"]
         psm = ocr_cfg["psm"]
         oem = ocr_cfg["oem"]
@@ -30,6 +32,9 @@ class TesseractOCR:
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
         self.min_dim = int(ocr_cfg["min_dim"])
+
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
         log.debug(
             "OCR init: preprocess_mode=%s downscale=%s",
             self.preprocess_mode,
@@ -42,69 +47,42 @@ class TesseractOCR:
         if mode == "off":
             return gray
         if mode == "fast":
-            # Otsu thresholding is faster than CLAHE + blur.
             _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             return binary
 
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-
-        # Slight blur to reduce noise
+        enhanced = self._clahe.apply(gray)
         denoised = cv2.medianBlur(enhanced, 3)
-
         return denoised
 
     def _downscale_roi(self, gray):
         if self.downscale >= 1.0:
             return gray
-
         h, w = gray.shape[:2]
         if self.min_dim and min(h, w) <= self.min_dim:
             return gray
-
         scale = self.downscale
         if self.min_dim:
             scale = max(scale, self.min_dim / float(min(h, w)))
         if scale >= 1.0:
             return gray
-
         new_w = max(1, int(round(w * scale)))
         new_h = max(1, int(round(h * scale)))
         return cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _apply_roi(self, frame):
+        """Crop the frame to the configured ROI, optionally drawing the debug overlay.
+
+        delegates to shared roi utility instead of duplicating the
+        coordinate math that also lives in web.py and paddle_ocr.py.
+        """
         roi = cfg.get("roi")
         if not roi:
             return frame
 
-        h, w = frame.shape[:2]
-
-        def _to_px(value, max_dim):
-            if value <= 1.0:
-                return int(round(value * max_dim))
-            return int(round(value))
-
-        x1 = _to_px(float(roi.get("x_start", 0.0)), w)
-        y1 = _to_px(float(roi.get("y_start", 0.0)), h)
-        x2 = _to_px(float(roi.get("x_end", 1.0)), w)
-        y2 = _to_px(float(roi.get("y_end", 1.0)), h)
-
-        x1 = max(0, min(w - 1, x1))
-        x2 = max(0, min(w - 1, x2))
-        y1 = max(0, min(h - 1, y1))
-        y2 = max(0, min(h - 1, y2))
-
-        if x2 <= x1 or y2 <= y1:
-            return frame
-
         if self.debug_draw_roi:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            draw_roi(frame, roi)
 
-        cropped = frame[y1:y2, x1:x2]
-        if cropped is None or cropped.size == 0:
-            log.warning("ROI crop resulted in an empty or invalid frame")
-        return cropped
+        return apply_roi(frame, roi)
 
     def run(self, frame):
         roi_frame = self._apply_roi(frame)
@@ -116,8 +94,6 @@ class TesseractOCR:
         keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
 
         gray = self._downscale_roi(gray)
-
-        # Preprocess for faster/better OCR
         preprocessed = self._preprocess_image(gray)
 
         start_time = time.perf_counter()
@@ -138,27 +114,21 @@ class TesseractOCR:
         for i, text in enumerate(texts):
             if not text.strip():
                 continue
-
             try:
                 conf = float(confs[i])
             except (TypeError, ValueError, IndexError):
                 conf = -1.0
             if conf < 0:
                 continue
-
             word = text.lower()
-
-            # Filter by keywords/regex if defined
             if keyword_set and word not in keyword_set:
                 if self._date_pattern and not self._date_pattern.search(text):
                     continue
-
             detections.append({
                 "text": text,
-                "confidence": conf / 100  # normalize 0–1
+                "confidence": conf / 100
             })
 
-        # Return detections and processing time
         processing_time_ms = round(elapsed_ms, 1)
         log.debug("OCR run completed: processing_time_ms=%s", processing_time_ms)
         return {
@@ -167,4 +137,3 @@ class TesseractOCR:
             "mode": "ocr",
             "searched_word": keywords[0] if keywords else ""
         }
-
