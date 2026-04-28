@@ -54,15 +54,12 @@ object_detection:
   template:
     # One or more reference images used for matching.
     references:
-      - "data/templates/template_1776865591718.jpg"
-      - "data/templates/template_1776865591718_scale0_85.jpg"
-      - "data/templates/template_1776865591718_scale1_15.jpg"
-      - "data/templates/template_1776865611958.jpg"
-      - "data/templates/template_1776865611958_scale0_85.jpg"
-      - "data/templates/template_1776865611958_scale1_15.jpg"
-      - "data/templates/template_1776865627067.jpg"
-      - "data/templates/template_1776865627067_scale0_85.jpg"
-      - "data/templates/template_1776865627067_scale1_15.jpg"
+      - "data/templates/template_1777366974416.jpg"
+      - "data/templates/template_1777366974416_scale0_85.jpg"
+      - "data/templates/template_1777366974416_scale1_15.jpg"
+      - "data/templates/template_1777366989070.jpg"
+      - "data/templates/template_1777366989070_scale0_85.jpg"
+      - "data/templates/template_1777366989070_scale1_15.jpg"
     match_threshold: 0.6
     display_label: "boterbloempje"
     # Resize incoming ROI to reference dimensions before comparison.
