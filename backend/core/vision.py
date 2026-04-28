@@ -17,6 +17,7 @@ VISION_MODE = cfg["vision_mode"]
 ocr_instance = OCR()
 _inspection_engine: Optional[InspectionEngine] = None
 _app_state: Optional[Any] = None
+_cached_vision_mode: str = cfg.get("vision_mode", "object_detection")
 
 _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision_worker")
 
@@ -36,8 +37,9 @@ def _sync_classifier_state(model_path: str, loaded: bool) -> None:
 
 
 def bind_app_state(app_state) -> None:
-    global ocr_instance, _inspection_engine, _app_state
+    global ocr_instance, _inspection_engine, _app_state, _cached_vision_mode
     _app_state = app_state
+    _cached_vision_mode = cfg.get("vision_mode", "object_detection")
     ocr_instance = OCR(app_state=app_state)
     _inspection_engine = InspectionEngine(app_state)
 
@@ -155,36 +157,40 @@ def _run_object_detection(frame):
     return engine.evaluate(frame)
 
 
-def _run_with_callback(fn, frame, callback, mode: str) -> None:
+def _run_with_callback(fn, frame, callback, mode: str, profile: bool = False) -> None:
     def worker():
         start = time.perf_counter()
+        result = None
+        exception_msg = None
         try:
-            result = fn(frame)
+            result = fn(frame, profile=profile) if profile else fn(frame)
         except Exception as exc:
+            exception_msg = str(exc)
             duration_ms = round((time.perf_counter() - start) * 1000, 2)
-            logger.error("Vision worker exception: %s", exc)
             result = {
                 "status": "NOK",
                 "detections": [],
                 "processing_time_ms": duration_ms,
                 "mode": mode,
-                "error": str(exc),
+                "error": exception_msg,
             }
 
+        if exception_msg:
+            logger.error("Vision worker exception: %s", exception_msg)
         callback(_normalize_result(result, mode))
 
     _pool.submit(worker)
 
 
-def run_vision(frame, callback=None):
+def run_vision(frame, callback=None, profile: bool = False):
     mode_getter = getattr(_app_state, "get_vision_mode", None)
-    mode = mode_getter() if callable(mode_getter) else cfg["vision_mode"]
+    mode = mode_getter() if callable(mode_getter) else _cached_vision_mode
 
     if mode == "ocr":
         if callback:
-            _run_with_callback(ocr_instance.run, frame, callback, mode="ocr")
+            _run_with_callback(ocr_instance.run, frame, callback, mode="ocr", profile=profile)
             return None
-        return _normalize_result(ocr_instance.run(frame), mode="ocr")
+        return _normalize_result(ocr_instance.run(frame, profile=profile), mode="ocr")
 
     if mode == "object_detection":
         if callback:
