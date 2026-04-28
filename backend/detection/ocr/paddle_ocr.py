@@ -89,9 +89,18 @@ class PaddleOCR:
 
         return apply_roi(frame, roi)
 
-    def run(self, frame):
+    def run(self, frame, profile=False):
+        profile_data = {} if profile else None
+
+        t0 = time.perf_counter()
         roi_frame = self._apply_roi(frame)
+        if profile_data is not None:
+            profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+        t1 = time.perf_counter()
         roi_frame = self._downscale_roi(roi_frame)
+        if profile_data is not None:
+            profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
 
         debug_enabled = log.isEnabledFor(logging.DEBUG)
         if debug_enabled:
@@ -108,6 +117,7 @@ class PaddleOCR:
 
         start_time = time.perf_counter()
 
+        t2 = start_time
         try:
             results = self._paddle.ocr(roi_frame)
             if debug_enabled:
@@ -116,11 +126,15 @@ class PaddleOCR:
             log.error("PaddleOCR.ocr() failed: %s", e, exc_info=True)
             results = None
 
+        if profile_data is not None:
+            profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
+
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         detections = []
         total_candidates = 0
 
+        t3 = time.perf_counter()
         if results:
             for page_results in results:
                 if not page_results:
@@ -145,6 +159,10 @@ class PaddleOCR:
                         "confidence": round(float(score), 3)
                     })
 
+        if profile_data is not None:
+            profile_data["filter_ms"] = round((time.perf_counter() - t3) * 1000, 3)
+            profile_data["total_ms"] = round(sum(profile_data.values()), 3)
+
         processing_time_ms = round(elapsed_ms, 1)
         searched_word = keywords[0] if keywords else ""
         log.debug(
@@ -154,9 +172,14 @@ class PaddleOCR:
             len(detections),
             searched_word,
         )
-        return {
+        result = {
             "detections": detections,
             "processing_time_ms": processing_time_ms,
             "mode": "ocr",
             "searched_word": searched_word
         }
+
+        if profile_data is not None:
+            result["_profile_ms"] = profile_data
+
+        return result
