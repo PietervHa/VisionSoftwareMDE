@@ -32,6 +32,7 @@ class Camera:
         self.lock = threading.Lock()
         self.latest_frame = None
         self.running = True
+        self._flip = cam_cfg["flip"]
 
         t = threading.Thread(target=self._update, daemon=True)
         t.start()
@@ -43,7 +44,7 @@ class Camera:
             ret, frame = self.cap.read()
             if ret:
                 # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
-                frame = cv2.flip(frame, cfg["camera"]["flip"])
+                frame = cv2.flip(frame, self._flip)
                 rotation = self.app_state.get_camera_rotation() if self.app_state else 0
                 if rotation == 1:
                     frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
