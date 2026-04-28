@@ -197,7 +197,6 @@ class InspectionEngine:
 
         payload: dict
         if isinstance(raw_result, list):
-            logger.info("Roboflow returned a list with %s items", len(raw_result))
             payload = raw_result[0] if raw_result and isinstance(raw_result[0], dict) else {}
         elif isinstance(raw_result, dict):
             payload = raw_result
@@ -215,14 +214,16 @@ class InspectionEngine:
 
         processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
 
-        logger.debug(
-            "Roboflow parsed payload: model=%s keys=%s predictions=%s best_confidence=%.3f threshold=%.3f",
-            self._roboflow_model,
-            sorted(payload.keys()) if isinstance(payload, dict) else [],
-            len(predictions),
-            best_confidence,
-            threshold,
-        )
+        # Deferred logging: only log at debug level if enabled
+        if logger.isEnabledFor(10):  # logging.DEBUG
+            logger.debug(
+                "Roboflow parsed payload: model=%s keys=%s predictions=%s best_confidence=%.3f threshold=%.3f",
+                self._roboflow_model,
+                sorted(payload.keys()) if isinstance(payload, dict) else [],
+                len(predictions),
+                best_confidence,
+                threshold,
+            )
 
         return {
             "status": "OK" if detections and best_confidence >= threshold else "NOK",
