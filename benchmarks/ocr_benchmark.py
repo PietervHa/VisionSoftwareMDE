@@ -38,6 +38,8 @@ class OCRBenchmark:
         self._recent_proc_sum = 0.0
         self._recent_cycle_sum = 0.0
         self._recent_det_sum = 0
+        self._profile_stage_totals = {}
+        self._profile_samples = 0
 
     def _on_vision_result(self, result, trigger_time, frame_num):
         """Callback to handle async OCR results."""
@@ -46,6 +48,7 @@ class OCRBenchmark:
         detections = result.get("detections", [])
         detection_count = len(detections)
         error_message = result.get("error")
+        profile = result.get("_profile_ms")
         error_to_log = None
         debug_to_log = None
 
@@ -85,6 +88,16 @@ class OCRBenchmark:
                 batch_end = completed_frames
                 debug_to_log = (batch_start, batch_end, avg_proc, avg_cycle, total_detections)
 
+            if isinstance(profile, dict):
+                self._profile_samples += 1
+                for stage, value in profile.items():
+                    if stage == "total_ms":
+                        continue
+                    try:
+                        self._profile_stage_totals[stage] = self._profile_stage_totals.get(stage, 0.0) + float(value)
+                    except (TypeError, ValueError):
+                        continue
+
         if error_to_log:
             log.error("Frame %s OCR error: %s", error_to_log[0], error_to_log[1])
         if debug_to_log:
@@ -111,6 +124,8 @@ class OCRBenchmark:
         self._recent_proc_sum = 0.0
         self._recent_cycle_sum = 0.0
         self._recent_det_sum = 0
+        self._profile_stage_totals = {}
+        self._profile_samples = 0
         deadline = self.start_time + self.duration
 
         while self.running:
@@ -147,6 +162,7 @@ class OCRBenchmark:
             trigger_time = time.perf_counter()
             vision.run_vision(
                 frame,
+                profile=True,
                 callback=lambda result, tt=trigger_time, fn=self.frame_count: self._on_vision_result(
                     result, tt, fn
                 ),
@@ -213,6 +229,15 @@ class OCRBenchmark:
             },
         }
 
+        if self._profile_samples:
+            stats["profile"] = {
+                "samples": self._profile_samples,
+                "avg_stage_ms": {
+                    stage: round(total / self._profile_samples, 3)
+                    for stage, total in sorted(self._profile_stage_totals.items())
+                },
+            }
+
         return stats
 
     def save_results(self, output_dir="benchmark_results"):
@@ -268,6 +293,10 @@ class OCRBenchmark:
         log.info("  Min per frame:  %s", stats["detections"]["min_per_frame"])
         log.info("  Max per frame:  %s", stats["detections"]["max_per_frame"])
         log.info("  Mean per frame: %s", stats["detections"]["mean_per_frame"])
+        if "profile" in stats:
+            log.info("OCR STAGE PROFILE (%s samples):", stats["profile"]["samples"])
+            for stage, avg_ms in stats["profile"]["avg_stage_ms"].items():
+                log.info("  %s: %s ms", stage, avg_ms)
         log.info("%s", "=" * 60)
 
 
