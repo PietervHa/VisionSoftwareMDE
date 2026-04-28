@@ -20,7 +20,7 @@ ocr:
     - "www.theimagingsource.com"
   # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
   date_regex: '\b\d{2}/\d{2}/\d{4}\b'
-  preprocess: "fast"
+  preprocess: "fast"  # valid values: "fast" (default), "accurate"
   downscale: 0.6
   min_dim: 240
   psm: 7
@@ -57,9 +57,9 @@ object_detection:
       - "data/templates/template_1777366974416.jpg"
       - "data/templates/template_1777366974416_scale0_85.jpg"
       - "data/templates/template_1777366974416_scale1_15.jpg"
-      - "data/templates/template_1777366989070.jpg"
-      - "data/templates/template_1777366989070_scale0_85.jpg"
-      - "data/templates/template_1777366989070_scale1_15.jpg"
+      - "data/templates/template_1777371544433.jpg"
+      - "data/templates/template_1777371544433_scale0_85.jpg"
+      - "data/templates/template_1777371544433_scale1_15.jpg"
     match_threshold: 0.6
     display_label: "boterbloempje"
     # Resize incoming ROI to reference dimensions before comparison.
