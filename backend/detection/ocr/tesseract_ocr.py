@@ -84,26 +84,46 @@ class TesseractOCR:
 
         return apply_roi(frame, roi)
 
-    def run(self, frame):
+    def run(self, frame, profile=False):
+        profile_data = {} if profile else None
+
+        t0 = time.perf_counter()
         roi_frame = self._apply_roi(frame)
+        if profile_data is not None:
+            profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+        t1 = time.perf_counter()
         gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY) if len(roi_frame.shape) == 3 else roi_frame
+        if profile_data is not None:
+            profile_data["grayscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
+
         keywords = (
             [self.app_state.get_ocr_keyword()]
             if self.app_state else self.keywords
         )
         keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
 
+        t2 = time.perf_counter()
         gray = self._downscale_roi(gray)
+        if profile_data is not None:
+            profile_data["downscale_ms"] = round((time.perf_counter() - t2) * 1000, 3)
+
+        t3 = time.perf_counter()
         preprocessed = self._preprocess_image(gray)
+        if profile_data is not None:
+            profile_data["preprocess_ms"] = round((time.perf_counter() - t3) * 1000, 3)
 
         start_time = time.perf_counter()
 
+        t4 = start_time
         data = pytesseract.image_to_data(
             preprocessed,
             lang=self.languages,
             config=self.tesseract_config,
             output_type=pytesseract.Output.DICT
         )
+        if profile_data is not None:
+            profile_data["ocr_ms"] = round((time.perf_counter() - t4) * 1000, 3)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
@@ -111,6 +131,7 @@ class TesseractOCR:
         texts = data.get("text", [])
         confs = data.get("conf", [])
 
+        t5 = time.perf_counter()
         for i, text in enumerate(texts):
             if not text.strip():
                 continue
@@ -128,12 +149,20 @@ class TesseractOCR:
                 "text": text,
                 "confidence": conf / 100
             })
+        if profile_data is not None:
+            profile_data["filter_ms"] = round((time.perf_counter() - t5) * 1000, 3)
+            profile_data["total_ms"] = round(sum(profile_data.values()), 3)
 
         processing_time_ms = round(elapsed_ms, 1)
         log.debug("OCR run completed: processing_time_ms=%s", processing_time_ms)
-        return {
+        result = {
             "detections": detections,
             "processing_time_ms": processing_time_ms,
             "mode": "ocr",
             "searched_word": keywords[0] if keywords else ""
         }
+
+        if profile_data is not None:
+            result["_profile_ms"] = profile_data
+
+        return result
