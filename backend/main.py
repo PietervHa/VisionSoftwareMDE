@@ -2,6 +2,7 @@ import threading
 import keyboard
 from backend.core.camera import Camera
 from backend.core.vision import run_vision, bind_app_state
+from backend.core.tcp_trigger_server import TCPTriggerServer
 from frontend.web import create_app
 from backend.core.state import AppState
 import time
@@ -97,6 +98,13 @@ def main():
             daemon=True,
         )
         web_thread.start()
+
+        trigger_server = TCPTriggerServer(
+            camera=camera,
+            run_vision_fn=run_vision,
+            process_result_fn=lambda result, t: _process_vision_result(result, t, app_state),
+        )
+        trigger_server.start()
 
         vision_trigger_loop(camera, app_state)
     except Exception as exc:

@@ -38,7 +38,7 @@ camera:
 
 # Object detection settings
 object_detection:
-  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
+  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path), template (local template matching)
   # Switch this to select which detection pipeline is used at runtime.
   backend: "template"
 
@@ -61,7 +61,7 @@ object_detection:
       - "data/templates/template_1777371544433_scale0_85.jpg"
       - "data/templates/template_1777371544433_scale1_15.jpg"
     match_threshold: 0.6
-    display_label: "boterbloempje"
+    display_label: "Stiftdop"
     # Resize incoming ROI to reference dimensions before comparison.
     resize_to_reference: true
 
@@ -89,4 +89,15 @@ web:
 # Output settings
 output:
   result_dir: "data/results"
+
+# Trigger settings
+trigger:
+  enabled: false        # Set to true to activate TCP trigger listener
+  type: "tcp"
+  host: "0.0.0.0"
+  port: 5001
+  trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
+  response_ok: "OK\n"   # Response sent back on OK result
+  response_nok: "NOK\n" # Response sent back on NOK result
+  timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
 
