@@ -8,6 +8,12 @@ from backend.core.config_loader import cfg
 
 _write_lock = threading.Lock()
 
+# Pre-resolve output directory at module load time
+_result_dir = cfg.get("output", {}).get("result_dir", "data/results")
+_output_dir = Path(_result_dir)
+if not _output_dir.is_absolute():
+    _output_dir = Path(__file__).resolve().parents[2] / _output_dir
+
 
 def save_result(result: dict):
     now = datetime.now()
@@ -15,13 +21,9 @@ def save_result(result: dict):
     with _write_lock:
         result["timestamp"] = now.isoformat()
 
-        result_dir = cfg.get("output", {}).get("result_dir", "data/results")
-        output_dir = Path(result_dir)
-        if not output_dir.is_absolute():
-            output_dir = Path(__file__).resolve().parents[2] / output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
+        _output_dir.mkdir(parents=True, exist_ok=True)
 
-        daily_file = output_dir / f"{now.date().isoformat()}.jsonl"
+        daily_file = _output_dir / f"{now.date().isoformat()}.jsonl"
         with daily_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(result, ensure_ascii=False))
             handle.write("\n")

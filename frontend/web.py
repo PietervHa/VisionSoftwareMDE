@@ -4,6 +4,7 @@ from flask_cors import CORS
 from flask import jsonify, request
 from pathlib import Path
 from backend.core.config_loader import cfg
+from backend.utils.roi import draw_roi
 import time
 
 
@@ -13,50 +14,22 @@ def _resolve_repo_path(path: str) -> Path:
         resolved = Path(__file__).resolve().parents[1] / resolved
     return resolved.resolve()
 
+
 def create_app(camera, app_state):
     app = Flask(__name__)
     CORS(app)
 
-    def _draw_roi(frame):
-        if not cfg["hmi"]["debug_draw_roi"]:
-            return frame
-
-        roi = cfg.get("roi")
-        if not roi:
-            return frame
-
-        h, w = frame.shape[:2]
-
-        def _to_px(value, max_dim):
-            if value <= 1.0:
-                return int(round(value * max_dim))
-            return int(round(value))
-
-        x1 = _to_px(float(roi.get("x_start", 0.0)), w)
-        y1 = _to_px(float(roi.get("y_start", 0.0)), h)
-        x2 = _to_px(float(roi.get("x_end", 1.0)), w)
-        y2 = _to_px(float(roi.get("y_end", 1.0)), h)
-
-        x1 = max(0, min(w - 1, x1))
-        x2 = max(0, min(w - 1, x2))
-        y1 = max(0, min(h - 1, y1))
-        y2 = max(0, min(h - 1, y2))
-
-        if x2 <= x1 or y2 <= y1:
-            return frame
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        return frame
+    JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
 
     def generate_frames():
-        # Check if video feed is enabled
         if not cfg["hmi"]["enable_video_feed"]:
-            # Return a single black frame with text
             import numpy as np
             blank = np.zeros((480, 640, 3), dtype=np.uint8)
             cv2.putText(blank, "Video feed disabled", (150, 240),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            _, buffer = cv2.imencode(".jpg", blank)
+            # quality applies to the disabled-feed placeholder too
+            _, buffer = cv2.imencode(".jpg", blank,
+                                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             while True:
                 yield (
                     b"--frame\r\n"
@@ -64,33 +37,34 @@ def create_app(camera, app_state):
                     + buffer.tobytes()
                     + b"\r\n"
                 )
-                time.sleep(1)  # Low CPU usage when disabled
+                time.sleep(1)
 
-        # Frame rate cap at 30fps = 33.33ms per frame
         FRAME_INTERVAL_MS = 33.33
-        
+
         while True:
             frame_start = time.time()
-            
+
             frame = camera.get_frame()
             if frame is None:
-                # Sleep 10ms before retrying instead of immediately looping
                 time.sleep(0.01)
                 continue
 
             frame_for_stream = frame
-            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr":
-                frame_for_stream = _draw_roi(frame.copy())
+            roi = cfg.get("roi")
+            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr" and roi:
+                # use shared draw_roi instead of inline _draw_roi helper
+                frame_for_stream = draw_roi(frame.copy(), roi)
 
-            _, buffer = cv2.imencode(".jpg", frame_for_stream)
+            # encode with configured quality instead of OpenCV default (95)
+            _, buffer = cv2.imencode(".jpg", frame_for_stream,
+                                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n\r\n"
                 + buffer.tobytes()
                 + b"\r\n"
             )
-            
-            # Calculate elapsed time and sleep for remaining time in the 33ms window
+
             elapsed_ms = (time.time() - frame_start) * 1000
             remaining_ms = FRAME_INTERVAL_MS - elapsed_ms
             if remaining_ms > 0:
@@ -122,10 +96,8 @@ def create_app(camera, app_state):
     def set_threshold():
         if not app_state.get_maintenance_mode():
             return jsonify({"error": "Not in maintenance mode"}), 403
-
         data = request.json or {}
         new_value = float(data.get("threshold", 0.5))
-
         app_state.set_threshold(new_value)
         return jsonify({"threshold": app_state.get_threshold()})
 
@@ -139,7 +111,6 @@ def create_app(camera, app_state):
     def set_vision_mode():
         if not app_state.get_maintenance_mode():
             return jsonify({"error": "Not in maintenance mode"}), 403
-
         data = request.json or {}
         app_state.set_vision_mode(data.get("vision_mode", ""))
         return jsonify({"vision_mode": app_state.get_vision_mode()})
@@ -170,27 +141,21 @@ def create_app(camera, app_state):
     def load_classifier():
         if not app_state.get_maintenance_mode():
             return jsonify({"error": "Not in maintenance mode"}), 403
-
         data = request.json or {}
         model_path = str(data.get("model_path", "")).strip()
-
         resolved_path = _resolve_repo_path(model_path)
-
         if not model_path or not resolved_path.exists():
             return jsonify({"error": "model_path does not exist"}), 400
-
         classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
         return jsonify({"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)})
 
     @app.route("/classifier_status")
     def get_classifier_status():
         status = app_state.get_classifier_status()
-        return jsonify(
-            {
-                "classifier_loaded": bool(status.get("loaded", False)),
-                "model_path": status.get("model_path") or None,
-            }
-        )
+        return jsonify({
+            "classifier_loaded": bool(status.get("loaded", False)),
+            "model_path": status.get("model_path") or None,
+        })
 
     @app.route("/video_feed")
     def video_feed():

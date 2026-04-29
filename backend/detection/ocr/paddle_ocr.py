@@ -6,6 +6,7 @@ import os
 from paddleocr import PaddleOCR as _PaddleOCR
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
+from backend.utils.roi import apply_roi, draw_roi
 
 log = get_logger(__name__)
 
@@ -15,18 +16,23 @@ logging.getLogger("ppocr").setLevel(logging.ERROR)
 os.environ['PADDLE_DISABLE_FAST_MATH'] = '1'
 os.environ['FLAGS_use_mkldnn'] = '0'
 
+
 class PaddleOCR:
     def __init__(self, app_state=None):
         self.app_state = app_state
-        # Initialize PaddleOCR (oneDNN disabled via environment variables above)
         self._paddle = _PaddleOCR(lang="en")
         ocr_cfg = cfg["ocr"]
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
+        self.keyword_set = set(self.keywords)
         self.date_regex = ocr_cfg["date_regex"]
+        self._date_pattern = re.compile(self.date_regex) if self.date_regex else None
         self.debug_draw_roi = cfg["hmi"]["debug_draw_roi"]
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
         self.min_dim = int(ocr_cfg["min_dim"])
+
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
         log.debug(
             "PaddleOCR init: preprocess_mode=%s downscale=%s keywords=%s",
             self.preprocess_mode,
@@ -40,24 +46,17 @@ class PaddleOCR:
         if mode == "off":
             return frame
 
-        # Convert to grayscale for preprocessing
         if len(frame.shape) == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
             gray = frame
-        
+
         if mode == "fast":
-            # Otsu thresholding is faster than CLAHE
             _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             return binary
 
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        
-        # Slight blur to reduce noise
+        enhanced = self._clahe.apply(gray)
         denoised = cv2.medianBlur(enhanced, 3)
-        
         return denoised
 
     def _downscale_roi(self, frame):
@@ -76,129 +75,111 @@ class PaddleOCR:
         return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     def _apply_roi(self, frame):
+        """Crop the frame to the configured ROI, optionally drawing the debug overlay.
+
+        delegates to shared roi utility instead of duplicating the
+        coordinate math that also lives in web.py and tesseract_ocr.py.
+        """
         roi = cfg.get("roi")
         if not roi:
             return frame
-        h, w = frame.shape[:2]
-
-        def _to_px(value, max_dim):
-            if value <= 1.0:
-                return int(round(value * max_dim))
-            return int(round(value))
-
-        x1 = _to_px(float(roi.get("x_start", 0.0)), w)
-        y1 = _to_px(float(roi.get("y_start", 0.0)), h)
-        x2 = _to_px(float(roi.get("x_end", 1.0)), w)
-        y2 = _to_px(float(roi.get("y_end", 1.0)), h)
-
-        x1 = max(0, min(w - 1, x1))
-        x2 = max(0, min(w - 1, x2))
-        y1 = max(0, min(h - 1, y1))
-        y2 = max(0, min(h - 1, y2))
-
-        if x2 <= x1 or y2 <= y1:
-            return frame
 
         if self.debug_draw_roi:
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            draw_roi(frame, roi)
 
-        cropped = frame[y1:y2, x1:x2]
-        if cropped is None or cropped.size == 0:
-            log.warning("ROI crop resulted in an empty or invalid frame")
-            return frame
-        return cropped
+        return apply_roi(frame, roi)
 
-    def run(self, frame):
-        # Apply ROI and downscale on frame
+    def run(self, frame, profile=False):
+        profile_data = {} if profile else None
+
+        t0 = time.perf_counter()
         roi_frame = self._apply_roi(frame)
-        roi_frame = self._downscale_roi(roi_frame)
+        if profile_data is not None:
+            profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
-        log.debug("DEBUG: roi_frame shape=%s, dtype=%s", roi_frame.shape, roi_frame.dtype)
+        t1 = time.perf_counter()
+        roi_frame = self._downscale_roi(roi_frame)
+        if profile_data is not None:
+            profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
+
+        debug_enabled = log.isEnabledFor(logging.DEBUG)
+        if debug_enabled:
+            log.debug("PaddleOCR input: shape=%s dtype=%s", roi_frame.shape, roi_frame.dtype)
 
         keywords = (
             [self.app_state.get_ocr_keyword()]
             if self.app_state else self.keywords
         )
+        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
 
-        log.debug("DEBUG: PaddleOCR run: searching for keywords=%s", keywords)
+        if debug_enabled:
+            log.debug("PaddleOCR run: searching for keywords=%s", keywords)
 
         start_time = time.perf_counter()
 
-        # PaddleOCR expects 3-channel color images (BGR), not grayscale
-        # Pass color frame directly without grayscale conversion
+        t2 = start_time
         try:
             results = self._paddle.ocr(roi_frame)
-            log.debug("DEBUG: PaddleOCR.ocr() returned results type=%s", type(results))
-            if results:
-                log.debug("DEBUG: PaddleOCR results length=%s", len(results))
+            if debug_enabled:
+                log.debug("PaddleOCR result pages=%s", len(results) if results else 0)
         except Exception as e:
             log.error("PaddleOCR.ocr() failed: %s", e, exc_info=True)
             results = None
 
+        if profile_data is not None:
+            profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
+
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
         detections = []
+        total_candidates = 0
 
+        t3 = time.perf_counter()
         if results:
-            # Legacy ocr() returns a list of pages; each page is a list of [bbox, (text, score)]
-            for page_idx, page_results in enumerate(results or []):
-                log.debug("DEBUG: Page %d, page_results type=%s, len=%s", page_idx, type(page_results), len(page_results) if page_results else 0)
+            for page_results in results:
                 if not page_results:
                     continue
-                for item_idx, item in enumerate(page_results or []):
-                    log.debug("DEBUG: Page %d, Item %d: type=%s, len=%s, content=%s", page_idx, item_idx, type(item), len(item) if isinstance(item, (list, tuple)) else 'N/A', str(item)[:100])
+                for item in page_results:
+                    total_candidates += 1
                     if not isinstance(item, (list, tuple)) or len(item) < 2:
                         continue
-
-                    bbox = item[0]
                     rec = item[1]
-
                     if not isinstance(rec, (list, tuple)) or len(rec) < 2:
-                        log.debug("DEBUG: Skipping item - rec is invalid: type=%s, len=%s", type(rec), len(rec) if isinstance(rec, (list, tuple)) else 'N/A')
                         continue
-
                     text = rec[0]
                     score = rec[1]
-
                     if not text.strip():
-                        log.debug("DEBUG: Skipping empty text")
                         continue
-
-                    log.info("DEBUG PaddleOCR RAW detected: text=%r confidence=%.3f", text, score)
-
                     word = text.lower()
-
-                    # Filter by keywords/regex if defined (exact match like TesseractOCR)
-                    if keywords and word not in keywords:
-                        if self.date_regex and not re.search(self.date_regex, text):
-                            log.info("DEBUG PaddleOCR FILTERED OUT: text=%r confidence=%.3f (no keyword/date match, keywords=%s, date_regex=%s)", text, score, keywords, self.date_regex)
+                    if keyword_set and word not in keyword_set:
+                        if self._date_pattern and not self._date_pattern.search(text):
                             continue
-                        else:
-                            log.info("DEBUG PaddleOCR MATCHED REGEX: text=%r confidence=%.3f (date_regex=%s)", text, score, self.date_regex)
-                    else:
-                        log.info("DEBUG PaddleOCR MATCHED KEYWORD: text=%r confidence=%.3f (keywords=%s)", text, score, keywords)
-
                     detections.append({
                         "text": text,
                         "confidence": round(float(score), 3)
                     })
-        else:
-            log.debug("DEBUG: results is None or empty")
+
+        if profile_data is not None:
+            profile_data["filter_ms"] = round((time.perf_counter() - t3) * 1000, 3)
+            profile_data["total_ms"] = round(sum(profile_data.values()), 3)
 
         processing_time_ms = round(elapsed_ms, 1)
         searched_word = keywords[0] if keywords else ""
-        log.info(
-            "DEBUG PaddleOCR run COMPLETED: processing_time_ms=%s total_detections=%s passed_detections=%s searched_word=%r detections=%s",
+        log.debug(
+            "PaddleOCR run completed: processing_time_ms=%s candidates=%s detections=%s searched_word=%r",
             processing_time_ms,
-            sum(len(p) if p else 0 for p in results) if results else 0,
+            total_candidates,
             len(detections),
             searched_word,
-            detections,
         )
-        return {
+        result = {
             "detections": detections,
             "processing_time_ms": processing_time_ms,
             "mode": "ocr",
             "searched_word": searched_word
         }
 
+        if profile_data is not None:
+            result["_profile_ms"] = profile_data
+
+        return result

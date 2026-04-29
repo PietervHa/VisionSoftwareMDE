@@ -29,7 +29,9 @@ class TemplateDetector:
                 self.logger.warning("Failed to load template reference, skipping: %s", reference_path)
                 continue
 
-            self.references.append({"image": reference_image, "path": str(path_obj)})
+            # In __init__, pre-compute
+            prepared = self._prepare_gray_for_ssim(reference_image)
+            self.references.append({"image": reference_image, "prepared": prepared, "path": str(path_obj)})
 
         self.logger.info("TemplateDetector loaded %d reference image(s)", len(self.references))
 
@@ -70,7 +72,7 @@ class TemplateDetector:
 
             candidates = []
             for reference in self.references:
-                ref_gray = self._prepare_gray_for_ssim(reference["image"])
+                ref_gray = reference["prepared"]
                 ref_h, ref_w = ref_gray.shape[:2]
                 frm_h, frm_w = frame_gray.shape[:2]
 
@@ -87,6 +89,8 @@ class TemplateDetector:
 
                 match = cv2.matchTemplate(frame_gray, ref_gray, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(match)
+                if max_val < self.match_threshold * 0.7:
+                    continue  # skip SSIM — no chance of passing
 
                 x, y = max_loc
                 crop = frame_gray[y : y + ref_h, x : x + ref_w]

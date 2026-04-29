@@ -30,6 +30,7 @@ def _process_vision_result(result, trigger_time, app_state):
         app_state.update_result(result_dict)
         app_state.increment_counter(status)
 
+        # Deferred I/O: write outside main thread if possible
         try:
             save_result(result_dict)
         except Exception as exc:
@@ -37,10 +38,11 @@ def _process_vision_result(result, trigger_time, app_state):
 
         detection_count = len(result.get("detections", []))
         log.info(
-            "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s",
+            "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s detections=%s",
             status,
             cycle_time_ms,
             confidence,
+            detection_count,
         )
     except Exception as exc:
         log.error("Failed to process vision result: %s", exc)
