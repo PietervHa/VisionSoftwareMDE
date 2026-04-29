@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analytics - Vision Software</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/analytics.css">
+</head>
+<body>
+    <main class="page">
+        <header class="header">
+            <div class="header-left">
+                <a href="/">&larr; Back to HMI</a>
+            </div>
+            <div class="header-title">Inspection Analytics</div>
+            <div class="header-right">
+                <div id="todayText">Today: Loading...</div>
+                <div id="updatedText">Last updated: --:--:--</div>
+            </div>
+        </header>
+
+        <div id="refreshError" class="refresh-error">Failed to refresh</div>
+
+        <section class="cards">
+            <article class="card">
+                <div class="card-label">Total Inspections</div>
+                <div id="totalValue" class="card-value">Loading...</div>
+            </article>
+            <article class="card">
+                <div class="card-label">OK Count</div>
+                <div id="okValue" class="card-value value-ok">Loading...</div>
+            </article>
+            <article class="card">
+                <div class="card-label">NOK Count</div>
+                <div id="nokValue" class="card-value value-nok">Loading...</div>
+            </article>
+            <article class="card">
+                <div class="card-label">OK Rate %</div>
+                <div id="okRateValue" class="card-value">Loading...</div>
+            </article>
+            <article class="card">
+                <div class="card-label">Avg Processing Time (ms)</div>
+                <div id="avgMsValue" class="card-value">Loading...</div>
+            </article>
+        </section>
+
+        <section class="chart-panel">
+            <div class="chart-wrap">
+                <canvas id="hourlyChart"></canvas>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/analytics.js"></script>
+</body>
+</html>
+
