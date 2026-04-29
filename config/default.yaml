@@ -90,3 +90,14 @@ web:
 output:
   result_dir: "data/results"
 
+# Trigger settings
+trigger:
+  enabled: false        # Set to true to activate TCP trigger listener
+  type: "tcp"
+  host: "0.0.0.0"
+  port: 5001
+  trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
+  response_ok: "OK\n"   # Response sent back on OK result
+  response_nok: "NOK\n" # Response sent back on NOK result
+  timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
+
