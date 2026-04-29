@@ -38,7 +38,7 @@ camera:
 
 # Object detection settings
 object_detection:
-  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path)
+  # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path), template (local template matching)
   # Switch this to select which detection pipeline is used at runtime.
   backend: "template"
 
@@ -61,7 +61,7 @@ object_detection:
       - "data/templates/template_1777371544433_scale0_85.jpg"
       - "data/templates/template_1777371544433_scale1_15.jpg"
     match_threshold: 0.6
-    display_label: "boterbloempje"
+    display_label: "Stiftdop"
     # Resize incoming ROI to reference dimensions before comparison.
     resize_to_reference: true
 
