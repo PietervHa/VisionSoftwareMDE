@@ -151,11 +151,13 @@
         function updateNokChart(data) {
             const labels = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
             const source = data && data.timeline ? data.timeline : {};
+            const okPerHour = labels.map(h => Number((source[h] && source[h].ok) || 0));
             const nokPerHour = labels.map(h => Number((source[h] && source[h].nok) || 0));
 
             if (nokChart) {
                 nokChart.data.labels = labels;
-                nokChart.data.datasets[0].data = nokPerHour;
+                nokChart.data.datasets[0].data = okPerHour;
+                nokChart.data.datasets[1].data = nokPerHour;
                 nokChart.update();
                 return;
             }
@@ -164,18 +166,28 @@
                 type: "line",
                 data: {
                     labels: labels,
-                    datasets: [{
-                        label: "NOK per Hour",
-                        data: nokPerHour,
-                        borderColor: "red",
-                        backgroundColor: "rgba(255,0,0,0.1)",
-                        fill: true,
-                        tension: 0.3
-                    }]
+                    datasets: [
+                        {
+                            label: "OK per Hour",
+                            data: okPerHour,
+                            borderColor: "green",
+                            backgroundColor: "rgba(0,200,0,0.1)",
+                            fill: true,
+                            tension: 0.3
+                        },
+                        {
+                            label: "NOK per Hour",
+                            data: nokPerHour,
+                            borderColor: "red",
+                            backgroundColor: "rgba(255,0,0,0.1)",
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
-                    plugins: { title: { display: true, text: "NOK Trend Today", color: "#eee" } },
+                    plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#eee" } },
                     scales: { y: { beginAtZero: true, ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } } }
                 }
             });
