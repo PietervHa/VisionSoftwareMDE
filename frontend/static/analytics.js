@@ -12,6 +12,10 @@
         const hourLabels = Array.from({ length: 24 }, (_, i) => String(i));
         const okData = new Array(24).fill(0);
         const nokData = new Array(24).fill(0);
+        const tabBarBtn = document.getElementById("tab-bar");
+        const tabLineBtn = document.getElementById("tab-line");
+
+        let nokChart = null; // line chart instance for NOK trend
 
         const chart = new Chart(document.getElementById("hourlyChart"), {
             type: "bar",
@@ -144,6 +148,63 @@
             chart.update();
         }
 
+        function updateNokChart(data) {
+            const labels = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+            const source = data && data.timeline ? data.timeline : {};
+            const nokPerHour = labels.map(h => Number((source[h] && source[h].nok) || 0));
+
+            if (nokChart) {
+                nokChart.data.labels = labels;
+                nokChart.data.datasets[0].data = nokPerHour;
+                nokChart.update();
+                return;
+            }
+
+            nokChart = new Chart(document.getElementById("chart-nok-trend"), {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: "NOK per Hour",
+                        data: nokPerHour,
+                        borderColor: "red",
+                        backgroundColor: "rgba(255,0,0,0.1)",
+                        fill: true,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { title: { display: true, text: "NOK Trend Today", color: "#eee" } },
+                    scales: { y: { beginAtZero: true, ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } } }
+                }
+            });
+        }
+
+        // Tab handling: switch between bar and line charts
+        function setActiveTab(tab) {
+            const barCanvas = document.getElementById("hourlyChart");
+            const lineCanvas = document.getElementById("chart-nok-trend");
+            if (tab === 'bar') {
+                if (barCanvas) barCanvas.style.display = '';
+                if (lineCanvas) lineCanvas.style.display = 'none';
+                tabBarBtn && tabBarBtn.classList.add('active');
+                tabLineBtn && tabLineBtn.classList.remove('active');
+            } else {
+                if (barCanvas) barCanvas.style.display = 'none';
+                if (lineCanvas) lineCanvas.style.display = '';
+                tabBarBtn && tabBarBtn.classList.remove('active');
+                tabLineBtn && tabLineBtn.classList.add('active');
+            }
+        }
+
+        if (tabBarBtn) {
+            tabBarBtn.addEventListener('click', () => setActiveTab('bar'));
+        }
+        if (tabLineBtn) {
+            tabLineBtn.addEventListener('click', () => setActiveTab('line'));
+        }
+
         async function fetchData() {
             try {
                 const response = await fetch("/analytics/data", { method: "GET", cache: "no-store" });
@@ -157,6 +218,7 @@
 
                 updateCards(data);
                 updateChart(data.timeline);
+                updateNokChart(data);
             } catch (err) {
                 showRefreshError();
                 updatedText.textContent = `Last updated: ${formatTime(new Date())}`;
