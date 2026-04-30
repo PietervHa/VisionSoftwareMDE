@@ -14,8 +14,10 @@
         const nokData = new Array(24).fill(0);
         const tabBarBtn = document.getElementById("tab-bar");
         const tabLineBtn = document.getElementById("tab-line");
+        const tabNokOnlyBtn = document.getElementById("tab-nok-only");
 
         let nokChart = null; // line chart instance for NOK trend
+        let nokOnlyChart = null; // line chart instance for NOK only
 
         const chart = new Chart(document.getElementById("hourlyChart"), {
             type: "bar",
@@ -187,8 +189,77 @@
                 },
                 options: {
                     responsive: true,
+                    maintainAspectRatio: false,
                     plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#eee" } },
                     scales: { y: { beginAtZero: true, ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } } }
+                }
+            });
+        }
+
+        function updateNokOnlyChart(data) {
+            const labels = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+            const source = data && data.timeline ? data.timeline : {};
+            const nokPerHour = labels.map(h => Number((source[h] && source[h].nok) || 0));
+
+            if (nokOnlyChart) {
+                nokOnlyChart.data.labels = labels;
+                nokOnlyChart.data.datasets[0].data = nokPerHour;
+                nokOnlyChart.update();
+                return;
+            }
+
+            nokOnlyChart = new Chart(document.getElementById("chart-nok-only"), {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: "NOK per Hour",
+                            data: nokPerHour,
+                            borderColor: "#9b1c1c",
+                            backgroundColor: "rgba(155,28,28,0.2)",
+                            fill: true,
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: "#eee",
+                            },
+                        },
+                        title: {
+                            display: true,
+                            text: "NOK Count per Hour",
+                            color: "#eee",
+                            font: {
+                                size: 18,
+                            },
+                        },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                        },
+                        x: {
+                            ticks: {
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                        },
+                    },
                 }
             });
         }
@@ -197,16 +268,28 @@
         function setActiveTab(tab) {
             const barCanvas = document.getElementById("hourlyChart");
             const lineCanvas = document.getElementById("chart-nok-trend");
+            const nokOnlyCanvas = document.getElementById("chart-nok-only");
+            
+            // Hide all charts
+            if (barCanvas) barCanvas.style.display = 'none';
+            if (lineCanvas) lineCanvas.style.display = 'none';
+            if (nokOnlyCanvas) nokOnlyCanvas.style.display = 'none';
+            
+            // Remove active class from all buttons
+            tabBarBtn && tabBarBtn.classList.remove('active');
+            tabLineBtn && tabLineBtn.classList.remove('active');
+            tabNokOnlyBtn && tabNokOnlyBtn.classList.remove('active');
+            
+            // Show selected chart and activate button
             if (tab === 'bar') {
                 if (barCanvas) barCanvas.style.display = '';
-                if (lineCanvas) lineCanvas.style.display = 'none';
                 tabBarBtn && tabBarBtn.classList.add('active');
-                tabLineBtn && tabLineBtn.classList.remove('active');
-            } else {
-                if (barCanvas) barCanvas.style.display = 'none';
+            } else if (tab === 'line') {
                 if (lineCanvas) lineCanvas.style.display = '';
-                tabBarBtn && tabBarBtn.classList.remove('active');
                 tabLineBtn && tabLineBtn.classList.add('active');
+            } else if (tab === 'nok-only') {
+                if (nokOnlyCanvas) nokOnlyCanvas.style.display = '';
+                tabNokOnlyBtn && tabNokOnlyBtn.classList.add('active');
             }
         }
 
@@ -215,6 +298,9 @@
         }
         if (tabLineBtn) {
             tabLineBtn.addEventListener('click', () => setActiveTab('line'));
+        }
+        if (tabNokOnlyBtn) {
+            tabNokOnlyBtn.addEventListener('click', () => setActiveTab('nok-only'));
         }
 
         async function fetchData() {
@@ -231,6 +317,7 @@
                 updateCards(data);
                 updateChart(data.timeline);
                 updateNokChart(data);
+                updateNokOnlyChart(data);
             } catch (err) {
                 showRefreshError();
                 updatedText.textContent = `Last updated: ${formatTime(new Date())}`;
