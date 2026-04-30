@@ -222,6 +222,32 @@ def create_app(camera, app_state):
                 except Exception:
                     continue
 
+            # Builds speed timeline in 15-minute buckets
+            # Key format: "HH:MM" for each 15-min slot (00:00, 00:15, 00:30, 00:45, 01:00 ...)
+            speed_buckets = {}
+            for r in results:
+                ts = r.get("timestamp", "")
+                pt = r.get("processing_time_ms")
+                if not isinstance(pt, (int, float)):
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    minute_slot = (dt.minute // 15) * 15
+                    key = f"{dt.hour:02d}:{minute_slot:02d}"
+                    if key not in speed_buckets:
+                        speed_buckets[key] = []
+                    speed_buckets[key].append(float(pt))
+                except Exception:
+                    continue
+
+            speed_timeline = {}
+            for key, times in speed_buckets.items():
+                speed_timeline[key] = {
+                    "avg": round(sum(times) / len(times), 2),
+                    "min": round(min(times), 2),
+                    "max": round(max(times), 2),
+                }
+
             return jsonify({
                 "date": date.today().isoformat(),
                 "total": total,
@@ -230,6 +256,7 @@ def create_app(camera, app_state):
                 "ok_rate": round(ok_count / total * 100, 1) if total > 0 else 0.0,
                 "avg_processing_ms": avg_processing_ms,
                 "timeline": timeline,
+                "speed_timeline": speed_timeline,
             })
 
         except Exception as exc:

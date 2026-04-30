@@ -15,9 +15,11 @@
         const tabBarBtn = document.getElementById("tab-bar");
         const tabLineBtn = document.getElementById("tab-line");
         const tabNokOnlyBtn = document.getElementById("tab-nok-only");
+        const tabSpeedBtn = document.getElementById("tab-speed");
 
         let nokChart = null; // line chart instance for NOK trend
         let nokOnlyChart = null; // line chart instance for NOK only
+        let speedChart = null; // line chart instance for processing speed
 
         const chart = new Chart(document.getElementById("hourlyChart"), {
             type: "bar",
@@ -264,21 +266,125 @@
             });
         }
 
-        // Tab handling: switch between bar and line charts
+        function updateSpeedChart(data) {
+            const speedTimeline = data && data.speed_timeline ? data.speed_timeline : {};
+            const labels = Object.keys(speedTimeline).sort();
+            const avgData = labels.map(k => speedTimeline[k].avg || 0);
+            const minData = labels.map(k => speedTimeline[k].min || 0);
+            const maxData = labels.map(k => speedTimeline[k].max || 0);
+
+            if (speedChart) {
+                speedChart.data.labels = labels;
+                speedChart.data.datasets[0].data = avgData;
+                speedChart.data.datasets[1].data = minData;
+                speedChart.data.datasets[2].data = maxData;
+                speedChart.update();
+                return;
+            }
+
+            speedChart = new Chart(document.getElementById("chart-speed"), {
+                type: "line",
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: "Avg (ms)",
+                            data: avgData,
+                            borderColor: "rgb(100, 160, 255)",
+                            backgroundColor: "rgba(100, 160, 255, 0.1)",
+                            fill: false,
+                            tension: 0.3,
+                            borderWidth: 2
+                        },
+                        {
+                            label: "Min (ms)",
+                            data: minData,
+                            borderColor: "rgba(0, 200, 100, 0.7)",
+                            backgroundColor: "transparent",
+                            fill: false,
+                            tension: 0.3,
+                            borderDash: [4, 4],
+                            borderWidth: 1
+                        },
+                        {
+                            label: "Max (ms)",
+                            data: maxData,
+                            borderColor: "rgba(255, 100, 100, 0.7)",
+                            backgroundColor: "transparent",
+                            fill: false,
+                            tension: 0.3,
+                            borderDash: [4, 4],
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: "#eee",
+                            },
+                        },
+                        title: {
+                            display: true,
+                            text: "Processing Speed (15-min intervals)",
+                            color: "#eee",
+                            font: {
+                                size: 18,
+                            },
+                        },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "ms",
+                                color: "#aaa",
+                            },
+                        },
+                        x: {
+                            ticks: {
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "Time",
+                                color: "#aaa",
+                            },
+                        },
+                    },
+                }
+            });
+        }
         function setActiveTab(tab) {
             const barCanvas = document.getElementById("hourlyChart");
             const lineCanvas = document.getElementById("chart-nok-trend");
             const nokOnlyCanvas = document.getElementById("chart-nok-only");
+            const speedCanvas = document.getElementById("chart-speed");
             
             // Hide all charts
             if (barCanvas) barCanvas.style.display = 'none';
             if (lineCanvas) lineCanvas.style.display = 'none';
             if (nokOnlyCanvas) nokOnlyCanvas.style.display = 'none';
+            if (speedCanvas) speedCanvas.style.display = 'none';
             
             // Remove active class from all buttons
             tabBarBtn && tabBarBtn.classList.remove('active');
             tabLineBtn && tabLineBtn.classList.remove('active');
             tabNokOnlyBtn && tabNokOnlyBtn.classList.remove('active');
+            tabSpeedBtn && tabSpeedBtn.classList.remove('active');
             
             // Show selected chart and activate button
             if (tab === 'bar') {
@@ -290,6 +396,9 @@
             } else if (tab === 'nok-only') {
                 if (nokOnlyCanvas) nokOnlyCanvas.style.display = '';
                 tabNokOnlyBtn && tabNokOnlyBtn.classList.add('active');
+            } else if (tab === 'speed') {
+                if (speedCanvas) speedCanvas.style.display = '';
+                tabSpeedBtn && tabSpeedBtn.classList.add('active');
             }
         }
 
@@ -301,6 +410,9 @@
         }
         if (tabNokOnlyBtn) {
             tabNokOnlyBtn.addEventListener('click', () => setActiveTab('nok-only'));
+        }
+        if (tabSpeedBtn) {
+            tabSpeedBtn.addEventListener('click', () => setActiveTab('speed'));
         }
 
         async function fetchData() {
@@ -318,6 +430,7 @@
                 updateChart(data.timeline);
                 updateNokChart(data);
                 updateNokOnlyChart(data);
+                updateSpeedChart(data);
             } catch (err) {
                 showRefreshError();
                 updatedText.textContent = `Last updated: ${formatTime(new Date())}`;
