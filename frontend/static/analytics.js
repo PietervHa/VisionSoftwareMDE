@@ -1,3 +1,35 @@
+        // Date navigation — start on today
+        const _today = new Date();
+        _today.setHours(0, 0, 0, 0);
+        let currentDate = new Date(_today);
+
+        function formatISODate(d) {
+            // (Europe/Amsterdam)
+            const formatter = new Intl.DateTimeFormat('en-CA', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                timeZone: 'Europe/Amsterdam'
+            });
+            return formatter.format(d);
+        }
+
+        function updateNavButtons(isToday, isMinDate) {
+            const btnPrev = document.getElementById("btn-prev-day");
+            const btnNext = document.getElementById("btn-next-day");
+            if (!btnPrev || !btnNext) return;
+
+            // Next button: gray and disabled when on today
+            btnNext.disabled = isToday;
+            btnNext.style.opacity = isToday ? "0.35" : "1";
+            btnNext.style.cursor = isToday ? "not-allowed" : "pointer";
+
+            // Prev button: gray and disabled when on oldest allowed date
+            btnPrev.disabled = isMinDate;
+            btnPrev.style.opacity = isMinDate ? "0.35" : "1";
+            btnPrev.style.cursor = isMinDate ? "not-allowed" : "pointer";
+        }
+
         const totalValue = document.getElementById("totalValue");
         const okValue = document.getElementById("okValue");
         const nokValue = document.getElementById("nokValue");
@@ -131,7 +163,10 @@
             avgMsValue.textContent = avgMs.toFixed(2);
             setOkRateColor(okRate);
 
-            todayText.textContent = `Today: ${data.date || new Date().toISOString().slice(0, 10)}`;
+            const isToday = !!data.is_today;
+            todayText.textContent = isToday
+                ? `Today: ${data.date}`
+                : `Viewing: ${data.date}`;
             updatedText.textContent = `Last updated: ${formatTime(new Date())}`;
         }
 
@@ -152,11 +187,26 @@
             chart.update();
         }
 
+        // Helper to retrieve hour data from timeline supporting both
+        // '0'..'23' and '00'..'23' keyed objects (some days use padded keys)
+        function getHourEntry(source, key) {
+            if (!source) return {};
+            // Try exact key first (e.g., '00' or '0')
+            if (source.hasOwnProperty(key)) return source[key] || {};
+            // Try unpadded numeric key (e.g., '0')
+            const numKey = String(Number(key));
+            if (source.hasOwnProperty(numKey)) return source[numKey] || {};
+            // Try padded 2-digit key (e.g., '00')
+            const padded = String(key).padStart(2, '0');
+            if (source.hasOwnProperty(padded)) return source[padded] || {};
+            return {};
+        }
+
         function updateNokChart(data) {
             const labels = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
             const source = data && data.timeline ? data.timeline : {};
-            const okPerHour = labels.map(h => Number((source[h] && source[h].ok) || 0));
-            const nokPerHour = labels.map(h => Number((source[h] && source[h].nok) || 0));
+            const okPerHour = labels.map(h => Number((getHourEntry(source, h).ok) || 0));
+            const nokPerHour = labels.map(h => Number((getHourEntry(source, h).nok) || 0));
 
             if (nokChart) {
                 nokChart.data.labels = labels;
@@ -201,7 +251,7 @@
         function updateNokOnlyChart(data) {
             const labels = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
             const source = data && data.timeline ? data.timeline : {};
-            const nokPerHour = labels.map(h => Number((source[h] && source[h].nok) || 0));
+            const nokPerHour = labels.map(h => Number((getHourEntry(source, h).nok) || 0));
 
             if (nokOnlyChart) {
                 nokOnlyChart.data.labels = labels;
@@ -411,13 +461,36 @@
         if (tabNokOnlyBtn) {
             tabNokOnlyBtn.addEventListener('click', () => setActiveTab('nok-only'));
         }
-        if (tabSpeedBtn) {
-            tabSpeedBtn.addEventListener('click', () => setActiveTab('speed'));
-        }
+         if (tabSpeedBtn) {
+             tabSpeedBtn.addEventListener('click', () => setActiveTab('speed'));
+         }
+
+         const btnPrev = document.getElementById("btn-prev-day");
+         const btnNext = document.getElementById("btn-next-day");
+
+         if (btnPrev) {
+             btnPrev.addEventListener("click", () => {
+                 if (btnPrev.disabled) return;
+                 currentDate.setDate(currentDate.getDate() - 1);
+                 fetchData();
+             });
+         }
+
+         if (btnNext) {
+             btnNext.addEventListener("click", () => {
+                 if (btnNext.disabled) return;
+                 currentDate.setDate(currentDate.getDate() + 1);
+                 // Never go past today
+                 const today = new Date();
+                 today.setHours(0, 0, 0, 0);
+                 if (currentDate > today) currentDate = new Date(today);
+                 fetchData();
+             });
+         }
 
         async function fetchData() {
             try {
-                const response = await fetch("/analytics/data", { method: "GET", cache: "no-store" });
+                const response = await fetch(`/analytics/data?date=${formatISODate(currentDate)}`, { method: "GET", cache: "no-store" });
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
@@ -427,13 +500,13 @@
                 }
 
                 updateCards(data);
+                updateNavButtons(!!data.is_today, !!data.is_min_date);
                 updateChart(data.timeline);
                 updateNokChart(data);
                 updateNokOnlyChart(data);
                 updateSpeedChart(data);
             } catch (err) {
                 showRefreshError();
-                updatedText.textContent = `Last updated: ${formatTime(new Date())}`;
             }
         }
 

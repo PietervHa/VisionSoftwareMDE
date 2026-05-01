@@ -1,5 +1,5 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import cv2
 from flask import Flask, Response, send_file
 from flask_cors import CORS
@@ -184,7 +184,23 @@ def create_app(camera, app_state):
             if not output_dir.is_absolute():
                 output_dir = Path(__file__).resolve().parents[1] / output_dir
 
-            daily_file = output_dir / f"{date.today().isoformat()}.jsonl"
+            # Parse requested date, default to today, clamp to 7-day window
+            today = date.today()
+            min_date = today - timedelta(days=6)  # 7 days including today
+
+            raw_date = request.args.get("date", "")
+            try:
+                requested_date = date.fromisoformat(raw_date) if raw_date else today
+            except ValueError:
+                requested_date = today
+
+            # Clamp: never go beyond today or before 7 days ago
+            if requested_date > today:
+                requested_date = today
+            if requested_date < min_date:
+                requested_date = min_date
+
+            daily_file = output_dir / f"{requested_date.isoformat()}.jsonl"
 
             results = []
             if daily_file.exists():
@@ -249,7 +265,9 @@ def create_app(camera, app_state):
                 }
 
             return jsonify({
-                "date": date.today().isoformat(),
+                "date": requested_date.isoformat(),
+                "is_today": requested_date == today,
+                "is_min_date": requested_date <= min_date,
                 "total": total,
                 "ok_count": ok_count,
                 "nok_count": nok_count,

@@ -29,18 +29,26 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            gap: 16px;
+            gap: 8px; /* reduced gap to bring charts closer to header */
         }
 
         .header {
             background: var(--panel-alt);
             border: 1px solid var(--line);
             border-radius: 10px;
-            padding: 14px 16px;
+            padding: 10px 12px; /* slightly reduced padding */
             display: grid;
             grid-template-columns: 1fr auto 1fr;
+            grid-template-rows: auto auto; /* allow a second row for the refresh/error message */
             align-items: center;
             gap: 12px;
+        }
+
+        .header .refresh-error {
+            grid-column: 1 / -1; /* span full width */
+            justify-self: center;
+            margin-top: 6px;
+            text-align: center;
         }
 
         .header-left a {
@@ -157,15 +165,29 @@
             gap: 8px;
         }
 
+        /* Date nav (prev/next) styling */
+        .date-nav {
+            display: inline-flex;
+            gap: 6px;
+            margin: 0 8px;
+            vertical-align: middle;
+        }
+
         .tab-btn {
-            padding: 8px 14px;
-            font-size: 14px;
+            /* Slightly smaller buttons to reduce vertical space */
+            padding: 6px 10px;
+            font-size: 13px;
             border-radius: 8px;
             border: 1px solid #555;
             background: #333;
             color: #bbb;
             cursor: pointer;
             text-align: center;
+        }
+
+        .tab-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
         }
 
         .tab-btn.active {
