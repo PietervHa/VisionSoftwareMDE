@@ -1,3 +1,5 @@
+import json
+from datetime import date, datetime, timedelta
 import cv2
 from flask import Flask, Response, send_file
 from flask_cors import CORS
@@ -168,5 +170,114 @@ def create_app(camera, app_state):
     def reset_counters():
         app_state.reset_counters()
         return jsonify({"status": "counters reset"})
+
+    @app.route("/analytics")
+    def analytics():
+        template_path = Path(__file__).resolve().parent / "templates" / "analytics.html"
+        return send_file(template_path)
+
+    @app.route("/analytics/data")
+    def analytics_data():
+        try:
+            result_dir = cfg.get("output", {}).get("result_dir", "data/results")
+            output_dir = Path(result_dir)
+            if not output_dir.is_absolute():
+                output_dir = Path(__file__).resolve().parents[1] / output_dir
+
+            # Parse requested date, default to today, clamp to 7-day window
+            today = date.today()
+            min_date = today - timedelta(days=6)  # 7 days including today
+
+            raw_date = request.args.get("date", "")
+            try:
+                requested_date = date.fromisoformat(raw_date) if raw_date else today
+            except ValueError:
+                requested_date = today
+
+            # Clamp: never go beyond today or before 7 days ago
+            if requested_date > today:
+                requested_date = today
+            if requested_date < min_date:
+                requested_date = min_date
+
+            daily_file = output_dir / f"{requested_date.isoformat()}.jsonl"
+
+            results = []
+            if daily_file.exists():
+                with daily_file.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                results.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                continue
+
+            total = len(results)
+            ok_count = sum(1 for r in results if r.get("status") == "OK")
+            nok_count = total - ok_count
+
+            processing_times = [
+                r["processing_time_ms"] for r in results
+                if isinstance(r.get("processing_time_ms"), (int, float))
+            ]
+            avg_processing_ms = round(
+                sum(processing_times) / len(processing_times), 2
+            ) if processing_times else 0.0
+
+            # Build timeline: group results by hour (0-23), count OK and NOK per hour
+            timeline = {str(h): {"ok": 0, "nok": 0} for h in range(24)}
+            for r in results:
+                ts = r.get("timestamp", "")
+                try:
+                    hour = str(datetime.fromisoformat(ts).hour)
+                    if r.get("status") == "OK":
+                        timeline[hour]["ok"] += 1
+                    else:
+                        timeline[hour]["nok"] += 1
+                except Exception:
+                    continue
+
+            # Builds speed timeline in 15-minute buckets
+            # Key format: "HH:MM" for each 15-min slot (00:00, 00:15, 00:30, 00:45, 01:00 ...)
+            speed_buckets = {}
+            for r in results:
+                ts = r.get("timestamp", "")
+                pt = r.get("processing_time_ms")
+                if not isinstance(pt, (int, float)):
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    minute_slot = (dt.minute // 15) * 15
+                    key = f"{dt.hour:02d}:{minute_slot:02d}"
+                    if key not in speed_buckets:
+                        speed_buckets[key] = []
+                    speed_buckets[key].append(float(pt))
+                except Exception:
+                    continue
+
+            speed_timeline = {}
+            for key, times in speed_buckets.items():
+                speed_timeline[key] = {
+                    "avg": round(sum(times) / len(times), 2),
+                    "min": round(min(times), 2),
+                    "max": round(max(times), 2),
+                }
+
+            return jsonify({
+                "date": requested_date.isoformat(),
+                "is_today": requested_date == today,
+                "is_min_date": requested_date <= min_date,
+                "total": total,
+                "ok_count": ok_count,
+                "nok_count": nok_count,
+                "ok_rate": round(ok_count / total * 100, 1) if total > 0 else 0.0,
+                "avg_processing_ms": avg_processing_ms,
+                "timeline": timeline,
+                "speed_timeline": speed_timeline,
+            })
+
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
 
     return app
