@@ -9,7 +9,7 @@ log = get_logger(__name__)
 TARGET = 1 / 30  # Target time per frame for ~30 FPS
 
 class Camera:
-    def __init__(self, index=0):  # <- change index
+    def __init__(self, index=0, app_state=None):  # <- change index
         cam_cfg = cfg["camera"]
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
         self.app_state = app_state

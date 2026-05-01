@@ -86,9 +86,10 @@ def vision_trigger_loop(camera, app_state):
 def main():
     setup_logging()
     app_state = AppState()
+    bind_app_state(app_state)
 
     try:
-        camera = Camera(0)
+        camera = Camera(0, app_state=app_state)
 
         web_cfg = cfg["web"]
         app = create_app(camera, app_state)
