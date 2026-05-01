@@ -158,8 +158,7 @@ class TesseractOCR:
         result = {
             "detections": detections,
             "processing_time_ms": processing_time_ms,
-            "mode": "ocr",
-            "searched_word": keywords[0] if keywords else ""
+            "mode": "ocr"
         }
 
         if profile_data is not None:

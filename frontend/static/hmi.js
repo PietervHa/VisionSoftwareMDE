@@ -1,22 +1,7 @@
 ﻿let CURRENT_MODE = "maintenance";
 let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
-let LAST_SYNCED_MODE = null;
-let LAST_APPLIED_MODE = null;
 const PASSWORD = "@Welkom01"; // hardcoded for now
-
-function updateVisionModeButtons() {
-    const ocrBtn = document.getElementById("modeOcrBtn");
-    const objBtn = document.getElementById("modeObjBtn");
-
-    if (ocrBtn) {
-        ocrBtn.classList.toggle("active", VISION_MODE === "ocr");
-    }
-
-    if (objBtn) {
-        objBtn.classList.toggle("active", VISION_MODE === "object_detection");
-    }
-}
 
 /* =========================
    RESULT POLLING
@@ -30,7 +15,6 @@ async function updateResult() {
 
         const statusEl = document.getElementById("status");
         const detEl = document.getElementById("detections");
-        const dynamicLabelEl = document.getElementById("dynamicLabel");
 
         if (result.status === "OK") {
             statusEl.textContent = "OK";
@@ -81,9 +65,6 @@ async function loadStatus() {
     const res = await fetch("/status");
     const data = await res.json();
     VISION_MODE = data.vision_mode;
-    CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
-    LAST_SYNCED_MODE = CURRENT_MODE;
-    updateVisionModeButtons();
 }
 
 function getPollingIntervalMs() {
@@ -108,12 +89,6 @@ async function loadThreshold() {
     } catch (e) {
         console.error("Failed to load threshold:", e);
     }
-}
-
-async function loadOcrKeyword() {
-    const res = await fetch("/ocr_keyword");
-    const data = await res.json();
-    document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
 }
 
 document.getElementById("applyThreshold").addEventListener("click", async () => {
@@ -146,18 +121,8 @@ function applyMode() {
     const banner = document.getElementById("modeBanner");
     const input = document.getElementById("thresholdInput");
     const applyBtn = document.getElementById("applyThreshold");
-    const ocrApplyBtn = document.getElementById("applyOcrKeyword");
     const prodBtn = document.getElementById("startProductionBtn");
     const maintBtn = document.getElementById("startMaintenanceBtn");
-    const visionModeToggle = document.getElementById("visionModeToggle");
-    const ocrKeywordSection = document.getElementById("ocrKeywordSection");
-    const cycleTimeSection = document.getElementById("cycleTimeSection");
-    const rotateBtn = document.getElementById("rotateCameraBtn");
-    const previousMode = LAST_APPLIED_MODE;
-
-    if (rotateBtn) {
-        rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
-    }
 
     if (CURRENT_MODE === "maintenance") {
         banner.textContent = "MAINTENANCE MODE";
@@ -165,18 +130,8 @@ function applyMode() {
 
         input.disabled = false;
         applyBtn.disabled = false;
-        if (ocrApplyBtn) ocrApplyBtn.disabled = false;
         prodBtn.style.display = "inline-block";
         maintBtn.style.display = "none";
-
-        if (visionModeToggle) {
-            visionModeToggle.style.pointerEvents = "auto";
-            visionModeToggle.style.opacity = "1";
-        }
-
-        if (cycleTimeSection) {
-            cycleTimeSection.style.display = "block";
-        }
 
         if (currentThreshold !== null) input.value = currentThreshold;
     }
@@ -187,18 +142,8 @@ function applyMode() {
 
         input.disabled = true;
         applyBtn.disabled = true;
-        if (ocrApplyBtn) ocrApplyBtn.disabled = true;
         prodBtn.style.display = "none";
         maintBtn.style.display = "inline-block";
-
-        if (visionModeToggle) {
-            visionModeToggle.style.pointerEvents = "none";
-            visionModeToggle.style.opacity = "0.4";
-        }
-
-        if (cycleTimeSection) {
-            cycleTimeSection.style.display = "none";
-        }
 
         if (currentThreshold !== null) input.value = currentThreshold;
     }
@@ -255,6 +200,7 @@ async function applyVisionMode(mode) {
     } catch (e) {
         console.error("Failed to sync vision mode:", e);
     }
+
 }
 
 /* =========================
@@ -279,36 +225,6 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
     applyMode();
 });
 
-document.getElementById("modeOcrBtn").addEventListener("click", () => {
-    if (CURRENT_MODE !== "maintenance") return;
-    applyVisionMode("ocr");
-});
-
-document.getElementById("modeObjBtn").addEventListener("click", () => {
-    if (CURRENT_MODE !== "maintenance") return;
-    applyVisionMode("object_detection");
-});
-
-document.getElementById("rotateCameraBtn").addEventListener("click", async () => {
-    if (CURRENT_MODE !== "maintenance") return;
-    await fetch("/camera_rotation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
-    });
-});
-
-document.getElementById("applyOcrKeyword").addEventListener("click", async () => {
-    if (CURRENT_MODE !== "maintenance") return;
-    const value = document.getElementById("ocrKeywordInput").value.trim();
-    if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
-    await fetch("/ocr_keyword", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ocr_keyword: value })
-    });
-});
-
 document.getElementById("resetBtn").addEventListener("click", async () => {
     if (!confirm("Are you sure you want to reset the counters?")) return;
     await fetch("/reset_counters", { method: "POST" });
@@ -322,7 +238,6 @@ async function init() {
         // Resolve mode first so all downstream behavior is mode-aware.
         await loadStatus();
         await loadThreshold();
-        await loadOcrKeyword();
         applyMode();
         startResultPolling();
     } catch (e) {

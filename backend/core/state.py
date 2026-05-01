@@ -48,9 +48,6 @@ class AppState:
             return {
                 "result": dict(self.latest_result),
                 "counters": dict(self.counters),
-                "maintenance_mode": self.maintenance_mode,
-                "vision_mode": self.vision_mode,
-                "ocr_keyword": self.ocr_keyword,
             }
 
     def get_threshold(self) -> float:
