@@ -8,41 +8,17 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
 from backend.core.camera import Camera
 from backend.core.config_loader import cfg
-from backend.core.state import AppState
 from backend.utils.logger import setup_logging, get_logger
 from backend.core import vision
 
 log = get_logger(__name__)
 
-OBJECT_DETECTION_MODE_ALIASES = {"object_detection", "classifier", "roboflow", "template", "yolo"}
-
-
-def _prepare_object_detection_mode():
-    configured_mode = str(cfg.get("vision_mode", "")).strip().lower()
-    od_cfg = cfg.get("object_detection", {})
-    backend = str(od_cfg.get("backend", "classifier")).strip().lower() if isinstance(od_cfg, dict) else "classifier"
-
-    if configured_mode == "ocr":
-        return False, configured_mode, backend
-
-    if configured_mode in OBJECT_DETECTION_MODE_ALIASES:
-        # Dispatcher routes OD through canonical mode, backend chooses implementation.
-        if configured_mode != "object_detection":
-            log.warning(
-                "vision_mode '%s' is treated as 'object_detection' for benchmarking (backend=%s).",
-                configured_mode,
-                backend,
-            )
-        cfg["vision_mode"] = "object_detection"
-        return True, configured_mode, backend
-
-    return False, configured_mode, backend
-
-class ObjectDetectionBenchmark:
+class OCRBenchmark:
     """
-    Benchmark object detection throughput and per-frame processing time.
+    Benchmark OCR throughput and per-frame timing.
     Uses the same async callback pattern as main.py.
     """
 
@@ -62,13 +38,17 @@ class ObjectDetectionBenchmark:
         self._recent_proc_sum = 0.0
         self._recent_cycle_sum = 0.0
         self._recent_det_sum = 0
+        self._profile_stage_totals = {}
+        self._profile_samples = 0
 
     def _on_vision_result(self, result, trigger_time, frame_num):
+        """Callback to handle async OCR results."""
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 2)
         processing_time_ms = float(result.get("processing_time_ms", 0.0))
         detections = result.get("detections", [])
         detection_count = len(detections)
         error_message = result.get("error")
+        profile = result.get("_profile_ms")
         error_to_log = None
         debug_to_log = None
 
@@ -108,11 +88,21 @@ class ObjectDetectionBenchmark:
                 batch_end = completed_frames
                 debug_to_log = (batch_start, batch_end, avg_proc, avg_cycle, total_detections)
 
+            if isinstance(profile, dict):
+                self._profile_samples += 1
+                for stage, value in profile.items():
+                    if stage == "total_ms":
+                        continue
+                    try:
+                        self._profile_stage_totals[stage] = self._profile_stage_totals.get(stage, 0.0) + float(value)
+                    except (TypeError, ValueError):
+                        continue
+
         if error_to_log:
-            log.error("Frame %s object-detection error: %s", error_to_log[0], error_to_log[1])
+            log.error("Frame %s OCR error: %s", error_to_log[0], error_to_log[1])
         if debug_to_log:
             log.debug(
-                "Frames %s-%s: %sms avg OD, %sms avg cycle, %s detections",
+                "Frames %s-%s: %sms avg OCR, %sms avg cycle, %s detections",
                 debug_to_log[0],
                 debug_to_log[1],
                 debug_to_log[2],
@@ -121,7 +111,7 @@ class ObjectDetectionBenchmark:
             )
 
     def run_benchmark(self, camera):
-        log.info("Starting Object Detection Benchmark (%s seconds)...", self.duration)
+        log.info("Starting OCR Benchmark (%s seconds)...", self.duration)
         log.info("Processing frames asynchronously (matches production behavior)...")
 
         self.running = True
@@ -134,6 +124,8 @@ class ObjectDetectionBenchmark:
         self._recent_proc_sum = 0.0
         self._recent_cycle_sum = 0.0
         self._recent_det_sum = 0
+        self._profile_stage_totals = {}
+        self._profile_samples = 0
         deadline = self.start_time + self.duration
 
         while self.running:
@@ -148,7 +140,7 @@ class ObjectDetectionBenchmark:
             self.frame_count += 1
             slot_acquired = False
 
-            # Apply backpressure so OD workers can complete and produce data.
+            # Apply backpressure to avoid unlimited OCR worker buildup.
             while True:
                 with self.lock:
                     if self._inflight < self.max_inflight:
@@ -166,17 +158,18 @@ class ObjectDetectionBenchmark:
                 self.frame_count -= 1
                 break
 
-            # Cycle starts when the async vision job is actually dispatched.
+            # Cycle starts when the async OCR job is actually dispatched.
             trigger_time = time.perf_counter()
             vision.run_vision(
                 frame,
+                profile=True,
                 callback=lambda result, tt=trigger_time, fn=self.frame_count: self._on_vision_result(
                     result, tt, fn
                 ),
             )
 
         elapsed = time.perf_counter() - self.start_time
-        log.info("Benchmark time elapsed. Waiting for remaining worker threads to finish...")
+        log.info("Benchmark time elapsed. Waiting for remaining OCR threads to finish...")
 
         wait_start = time.perf_counter()
         while True:
@@ -236,6 +229,15 @@ class ObjectDetectionBenchmark:
             },
         }
 
+        if self._profile_samples:
+            stats["profile"] = {
+                "samples": self._profile_samples,
+                "avg_stage_ms": {
+                    stage: round(total / self._profile_samples, 3)
+                    for stage, total in sorted(self._profile_stage_totals.items())
+                },
+            }
+
         return stats
 
     def save_results(self, output_dir="benchmark_results"):
@@ -243,7 +245,7 @@ class ObjectDetectionBenchmark:
         output_path.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = output_path / f"object_detection_benchmark_{timestamp}.json"
+        filename = output_path / f"ocr_benchmark_{timestamp}.json"
 
         report = {
             "timestamp": datetime.now().isoformat(),
@@ -266,7 +268,7 @@ class ObjectDetectionBenchmark:
             return
 
         log.info("%s", "=" * 60)
-        log.info("OBJECT DETECTION BENCHMARK SUMMARY")
+        log.info("OCR BENCHMARK SUMMARY")
         log.info("%s", "=" * 60)
         log.info("Mode: %s", cfg["vision_mode"])
         log.info("Benchmark Duration: %s seconds", stats["duration_seconds"])
@@ -280,7 +282,7 @@ class ObjectDetectionBenchmark:
         log.info("  Mean:   %s ms", stats["cycle_time"]["mean_ms"])
         log.info("  Median: %s ms", stats["cycle_time"]["median_ms"])
         log.info("  StdDev: %s ms", stats["cycle_time"]["stdev_ms"])
-        log.info("PROCESSING TIME (Object detection inference):")
+        log.info("PROCESSING TIME (OCR inference):")
         log.info("  Min:    %s ms", stats["processing_time"]["min_ms"])
         log.info("  Max:    %s ms", stats["processing_time"]["max_ms"])
         log.info("  Mean:   %s ms", stats["processing_time"]["mean_ms"])
@@ -291,11 +293,15 @@ class ObjectDetectionBenchmark:
         log.info("  Min per frame:  %s", stats["detections"]["min_per_frame"])
         log.info("  Max per frame:  %s", stats["detections"]["max_per_frame"])
         log.info("  Mean per frame: %s", stats["detections"]["mean_per_frame"])
+        if "profile" in stats:
+            log.info("OCR STAGE PROFILE (%s samples):", stats["profile"]["samples"])
+            for stage, avg_ms in stats["profile"]["avg_stage_ms"].items():
+                log.info("  %s: %s ms", stage, avg_ms)
         log.info("%s", "=" * 60)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run object detection benchmark")
+    parser = argparse.ArgumentParser(description="Run OCR benchmark")
     parser.add_argument("--duration", type=int, default=30, help="Benchmark duration in seconds")
     parser.add_argument(
         "--output-dir",
@@ -312,7 +318,7 @@ def parse_args():
         "--max-inflight",
         type=int,
         default=1,
-        help="Maximum in-flight async object-detection jobs",
+        help="Maximum in-flight async OCR jobs",
     )
     return parser.parse_args()
 
@@ -321,24 +327,13 @@ def main():
     setup_logging()
     args = parse_args()
 
-    can_run, configured_mode, backend = _prepare_object_detection_mode()
-    if not can_run:
-        print("WARNING: config vision_mode is not an object-detection mode.")
-        print(
-            "Set vision_mode: object_detection (preferred) or a compatible alias "
-            "(roboflow/template/yolo/classifier) in config/default.yaml."
-        )
-        print(f"Current vision_mode: {configured_mode}")
+    if cfg["vision_mode"] != "ocr":
+        print("WARNING: config vision_mode is not 'ocr'.")
+        print("Set vision_mode: ocr in config/default.yaml to benchmark OCR.")
         sys.exit(1)
 
-    log.info("Object detection benchmark backend: %s", backend)
-
-    # Mirror production startup so vision dispatch has an initialized inspection engine.
-    app_state = AppState()
-    vision.bind_app_state(app_state)
-
     camera = Camera(0)
-    benchmark = ObjectDetectionBenchmark(
+    benchmark = OCRBenchmark(
         duration_seconds=args.duration,
         flush_wait_seconds=args.flush_wait,
         max_inflight=max(1, args.max_inflight),
@@ -358,4 +353,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
