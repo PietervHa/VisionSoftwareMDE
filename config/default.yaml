@@ -40,7 +40,7 @@ camera:
 object_detection:
   # Active backend: "classifier" (local HF classifier), "roboflow" (remote API), "yolo" (local YOLO model_path), template (local template matching)
   # Switch this to select which detection pipeline is used at runtime.
-  backend: "template"
+  backend: "classifier"
 
   # Local YOLO weights path (used when backend is set to "yolo").
   model_path: "models/yolov8n.pt"
