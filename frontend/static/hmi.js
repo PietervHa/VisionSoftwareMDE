@@ -4,6 +4,9 @@ let currentThreshold = null; // mirrors backend value
 let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
 const PASSWORD = "@Welkom01"; // hardcoded for now
+let LAST_DATASET_COUNTS_FETCH = 0;
+const DATASET_COUNTS_POLL_MS = 5000;
+let DATASET_CAPTURE_ACTIVE = false;
 
 function updateVisionModeButtons() {
     const ocrBtn = document.getElementById("modeOcrBtn");
@@ -72,6 +75,29 @@ async function updateResult() {
         document.getElementById("nokCount").textContent = counters.nok;
         document.getElementById("totalCount").textContent = counters.total;
 
+        // Throttle dataset counts polling to once every DATASET_COUNTS_POLL_MS
+        try {
+            const now = Date.now();
+            if (now - LAST_DATASET_COUNTS_FETCH >= DATASET_COUNTS_POLL_MS) {
+                LAST_DATASET_COUNTS_FETCH = now;
+                (async () => {
+                    try {
+                        const r = await fetch('/dataset/counts');
+                        if (!r.ok) return;
+                        const d = await r.json();
+                        const okEl = document.getElementById('liveDatasetOkCount');
+                        const defEl = document.getElementById('liveDatasetDefCount');
+                        if (okEl && typeof d.ok !== 'undefined') okEl.textContent = d.ok;
+                        if (defEl && typeof d.defective !== 'undefined') defEl.textContent = d.defective;
+                    } catch (e) {
+                        console.error('Failed to fetch dataset counts:', e);
+                    }
+                })();
+            }
+        } catch (e) {
+            console.error(e);
+        }
+
     } catch (e) {
         console.error(e);
     }
@@ -114,6 +140,88 @@ async function loadOcrKeyword() {
     const res = await fetch("/ocr_keyword");
     const data = await res.json();
     document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
+}
+
+function updateDatasetCaptureUI() {
+    const datasetBox = document.getElementById("datasetCaptureBox");
+    const instructions = document.getElementById("datasetCaptureInstructions");
+    const toggleBtn = document.getElementById("captureToggleBtn");
+    const counterDisplay = document.getElementById("datasetCaptureCounter");
+
+    const visible = VISION_MODE === "object_detection";
+    if (datasetBox) {
+        datasetBox.style.display = visible ? "block" : "none";
+    }
+
+    if (!visible) {
+        DATASET_CAPTURE_ACTIVE = false;
+    }
+
+    const active = visible && DATASET_CAPTURE_ACTIVE && CURRENT_MODE === "maintenance";
+
+    if (toggleBtn) {
+        toggleBtn.textContent = active ? "Stop Capture" : "Start Capture";
+        toggleBtn.classList.toggle("capture-active", active);
+        toggleBtn.disabled = CURRENT_MODE === "production";
+    }
+
+    if (instructions) {
+        instructions.hidden = !active;
+    }
+
+
+    if (counterDisplay) {
+        counterDisplay.hidden = !active;
+    }
+}
+
+function startDatasetCapture() {
+    if (VISION_MODE !== "object_detection") return;
+    DATASET_CAPTURE_ACTIVE = true;
+    updateDatasetCaptureUI();
+}
+
+function stopDatasetCapture() {
+    DATASET_CAPTURE_ACTIVE = false;
+    updateDatasetCaptureUI();
+}
+
+function toggleDatasetCapture() {
+    if (DATASET_CAPTURE_ACTIVE) {
+        stopDatasetCapture();
+    } else {
+        startDatasetCapture();
+    }
+}
+
+/* =========================
+   DATASET CAPTURE
+========================= */
+async function captureDatasetImage(label) {
+    try {
+        if (!DATASET_CAPTURE_ACTIVE) {
+            console.error("Dataset capture is not active.");
+            return;
+        }
+
+        const res = await fetch('/dataset/capture', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label })
+        });
+
+        const data = await res.json();
+        if (data && data.success) {
+            const okEl = document.getElementById('liveDatasetOkCount');
+            const defEl = document.getElementById('liveDatasetDefCount');
+            if (okEl && typeof data.ok !== 'undefined') okEl.textContent = data.ok;
+            if (defEl && typeof data.defective !== 'undefined') defEl.textContent = data.defective;
+        } else {
+            console.error('Failed to capture dataset image:', data && data.error ? data.error : data);
+        }
+    } catch (e) {
+        console.error('captureDatasetImage error:', e);
+    }
 }
 
 document.getElementById("applyThreshold").addEventListener("click", async () => {
@@ -166,6 +274,8 @@ function applyMode() {
         input.disabled = false;
         applyBtn.disabled = false;
         if (ocrApplyBtn) ocrApplyBtn.disabled = false;
+        const captureToggleBtn = document.getElementById("captureToggleBtn");
+        if (captureToggleBtn) captureToggleBtn.disabled = false;
         prodBtn.style.display = "inline-block";
         maintBtn.style.display = "none";
 
@@ -188,6 +298,8 @@ function applyMode() {
         input.disabled = true;
         applyBtn.disabled = true;
         if (ocrApplyBtn) ocrApplyBtn.disabled = true;
+        const captureToggleBtn = document.getElementById("captureToggleBtn");
+        if (captureToggleBtn) captureToggleBtn.disabled = true;
         prodBtn.style.display = "none";
         maintBtn.style.display = "inline-block";
 
@@ -210,6 +322,8 @@ function applyMode() {
             ? "flex"
             : "none";
     }
+
+    updateDatasetCaptureUI();
 
     if (previousMode !== null && previousMode !== CURRENT_MODE) {
         syncModeToBackend();
@@ -243,6 +357,8 @@ async function applyVisionMode(mode) {
             ? "flex"
             : "none";
     }
+
+    updateDatasetCaptureUI();
 
     try {
         await fetch("/vision_mode", {
@@ -314,9 +430,30 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     await fetch("/reset_counters", { method: "POST" });
 });
 
+document.getElementById("captureToggleBtn").addEventListener("click", () => {
+    toggleDatasetCapture();
+});
+
+
+/* Keyboard shortcuts for dataset capture */
+document.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    
+    if (key === "1" && DATASET_CAPTURE_ACTIVE) {
+        e.preventDefault();
+        captureDatasetImage("ok");
+    } else if (key === "2" && DATASET_CAPTURE_ACTIVE) {
+        e.preventDefault();
+        captureDatasetImage("defective");
+    } else if (key === "3" && DATASET_CAPTURE_ACTIVE) {
+        e.preventDefault();
+        stopDatasetCapture();
+    }
+});
+
 /* =========================
-   INIT
-========================= */
+    INIT
+ ========================= */
 async function init() {
     try {
         // Resolve mode first so all downstream behavior is mode-aware.
@@ -324,6 +461,7 @@ async function init() {
         await loadThreshold();
         await loadOcrKeyword();
         applyMode();
+
         startResultPolling();
     } catch (e) {
         console.error("Initialization failed:", e);
