@@ -101,3 +101,7 @@ trigger:
   response_nok: "NOK\n" # Response sent back on NOK result
   timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
 
+# Security settings
+security:
+  maintenance_password: "@Welkom01"  # Password required to enter maintenance mode
+

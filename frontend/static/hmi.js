@@ -3,7 +3,7 @@ let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
 let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
-const PASSWORD = "@Welkom01"; // hardcoded for now
+let PASSWORD = null; // Loaded from backend
 let LAST_DATASET_COUNTS_FETCH = 0;
 const DATASET_COUNTS_POLL_MS = 5000;
 let DATASET_CAPTURE_ACTIVE = false;
@@ -140,6 +140,16 @@ async function loadOcrKeyword() {
     const res = await fetch("/ocr_keyword");
     const data = await res.json();
     document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
+}
+
+async function loadMaintenancePassword() {
+    try {
+        const res = await fetch("/maintenance_password");
+        const data = await res.json();
+        PASSWORD = data.maintenance_password || "";
+    } catch (e) {
+        console.error("Failed to load maintenance password:", e);
+    }
 }
 
 function updateDatasetCaptureUI() {
@@ -384,8 +394,8 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
 });
 
 document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
-    // Hardcoded password prompt
-    const userPass = prompt("Enter password to enter maintenance mode:", PASSWORD);
+    // Prompt for password without auto-filling it
+    const userPass = prompt("Enter password to enter maintenance mode:");
     if (userPass !== PASSWORD) {
         alert("Incorrect password. Access denied.");
         return;
@@ -460,6 +470,7 @@ async function init() {
         await loadStatus();
         await loadThreshold();
         await loadOcrKeyword();
+        await loadMaintenancePassword();
         applyMode();
 
         startResultPolling();

@@ -143,6 +143,11 @@ def create_app(camera, app_state):
         app_state.set_ocr_keyword(new_keyword)
         return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
 
+    @app.route("/maintenance_password")
+    def get_maintenance_password():
+        password = cfg.get("security", {}).get("maintenance_password", "")
+        return jsonify({"maintenance_password": password})
+
     @app.route("/load_classifier", methods=["POST"])
     def load_classifier():
         if not app_state.get_maintenance_mode():
