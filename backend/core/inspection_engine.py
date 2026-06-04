@@ -296,12 +296,19 @@ class InspectionEngine:
             pil_image = preprocess_to_pil(frame, size=224)
             prediction = self._classifier.predict(pil_image)
             threshold = self.app_state.get_threshold()
-            status = "OK" if prediction["confidence"] >= threshold and prediction["label"] == "ok" else "NOK"
+            
+            # Map classifier label "ok" to "non-defective" for display
+            label = prediction["label"]
+            if label.lower() == "ok":
+                label = "non-defective"
+            
+            # Determine status based on threshold and confidence (ok/non-defective = OK status)
+            status = "OK" if prediction["confidence"] >= threshold and prediction["label"].lower() == "ok" else "NOK"
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
 
             return {
                 "status": status,
-                "label": prediction["label"],
+                "label": label,
                 "confidence": prediction["confidence"],
                 "all_scores": prediction["all_scores"],
                 "processing_time_ms": processing_time_ms,

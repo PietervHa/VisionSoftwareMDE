@@ -7,6 +7,7 @@ from flask import jsonify, request
 from pathlib import Path
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
+from tools.capture_dataset import DatasetCapture
 import time
 
 
@@ -20,6 +21,9 @@ def _resolve_repo_path(path: str) -> Path:
 def create_app(camera, app_state):
     app = Flask(__name__)
     CORS(app)
+
+    # shared DatasetCapture instance for the lifetime of this Flask app
+    dataset_capture = DatasetCapture()
 
     JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
 
@@ -139,6 +143,11 @@ def create_app(camera, app_state):
         app_state.set_ocr_keyword(new_keyword)
         return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
 
+    @app.route("/maintenance_password")
+    def get_maintenance_password():
+        password = cfg.get("security", {}).get("maintenance_password", "")
+        return jsonify({"maintenance_password": password})
+
     @app.route("/load_classifier", methods=["POST"])
     def load_classifier():
         if not app_state.get_maintenance_mode():
@@ -170,6 +179,35 @@ def create_app(camera, app_state):
     def reset_counters():
         app_state.reset_counters()
         return jsonify({"status": "counters reset"})
+
+    @app.route("/dataset/capture", methods=["POST"])
+    def dataset_capture_route():
+        data = request.json or {}
+        label = str(data.get("label", "")).lower()
+        if label not in ("ok", "defective"):
+            return jsonify({"success": False, "error": "label must be 'ok' or 'defective'"}), 400
+
+        frame = camera.get_frame()
+        if frame is None:
+            return jsonify({"success": False, "error": "no frame available"}), 500
+
+        # apply the same rotation logic as DatasetCapture
+        rotated = dataset_capture._apply_rotation(frame)
+
+        try:
+            dataset_capture._save_frame(rotated, label)
+        except Exception as exc:
+            return jsonify({"success": False, "error": str(exc)}), 500
+
+        return jsonify({
+            "success": True,
+            "ok": dataset_capture.counters.get("ok", 0),
+            "defective": dataset_capture.counters.get("defective", 0),
+        })
+
+    @app.route("/dataset/counts")
+    def dataset_counts():
+        return jsonify(dataset_capture.counters)
 
     @app.route("/analytics")
     def analytics():

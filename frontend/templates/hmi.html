@@ -28,6 +28,9 @@
             <div id="cycleTimeSection" class="cycle-time" style="display:none;">
                 Processing Time: <span id="time">0 ms</span>
             </div>
+            <div id="datasetCaptureCounter" class="dataset-capture-counter" hidden>
+                Dataset Capture - OK: <span id="liveDatasetOkCount">0</span> | Defective: <span id="liveDatasetDefCount">0</span>
+            </div>
         </div>
         <div id="modeBanner" class="mode-overlay maintenance">
             MAINTENANCE MODE
@@ -55,7 +58,17 @@
             </div>
         </div>
 
-        <div class="info-box">
+        <div id="datasetCaptureBox" class="info-box">
+            <div class="dataset-capture-header">
+                <h2>Dataset Capture</h2>
+                <button id="captureToggleBtn" class="btn capture-toggle">Start Capture</button>
+            </div>
+            <div id="datasetCaptureInstructions" class="dataset-capture-instructions" hidden>
+                Capture mode is active. Press <b>1</b> to save as OK, <b>2</b> to save as Defective, or <b>3</b> to stop capture.
+            </div>
+        </div>
+
+        <div id="thresholdBox" class="info-box">
             <h2>Confidence Threshold</h2>
             <div class="threshold-row">
                 <input type="number" id="thresholdInput" min="0" max="1" step="0.05">
