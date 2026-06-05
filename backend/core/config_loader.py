@@ -1,3 +1,11 @@
+"""
+Configuration Loader
+
+This module handles loading and validating the application's configuration from 
+YAML files and environment variables. It provides a global `cfg` dictionary 
+used throughout the project.
+"""
+
 import sys
 import argparse
 import logging
@@ -14,6 +22,9 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 
 def _warn_missing_env_vars() -> None:
+    """
+    Checks for required environment variables and issues warnings if they are missing.
+    """
     missing = []
     for env_name in ("ROBOFLOW_API_KEY", "MAINTENANCE_PASSWORD"):
         if not str(os.environ.get(env_name, "")).strip():
@@ -65,10 +76,16 @@ def _load_config():
 
 
 def _as_dict(value):
+    """
+    Ensures the value is a dictionary, returning an empty dict if not.
+    """
     return value if isinstance(value, dict) else {}
 
 
 def _first_non_empty(*values, default=""):
+    """
+    Returns the first non-empty value from a list of candidates.
+    """
     for value in values:
         if value is None:
             continue
