@@ -1,3 +1,10 @@
+"""
+Local Image Classifier
+
+Provides a wrapper for Hugging Face-based image classification models running 
+locally on CPU or GPU.
+"""
+
 from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict
@@ -25,6 +32,9 @@ class ImageClassifier:
             logger.warning("Classifier remains unloaded after load attempt: model_path=%s", self.model_path)
 
     def _load(self) -> None:
+        """
+        Internal method to load the model and processor from the specified path.
+        """
         model_dir = Path(self.model_path)
         if not model_dir.is_absolute():
             model_dir = (Path(__file__).resolve().parents[3] / model_dir).resolve()
@@ -89,5 +99,8 @@ class ImageClassifier:
         }
 
     def is_loaded(self) -> bool:
+        """
+        Checks if the model and processor have been successfully loaded.
+        """
         return self.model is not None
 
