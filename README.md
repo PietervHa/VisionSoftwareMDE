@@ -25,6 +25,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Copy `.env.example` to `.env` in the project root and replace the placeholder values before starting the application:
+
+```dotenv
+ROBOFLOW_API_KEY=your_key_here
+MAINTENANCE_PASSWORD=your_password_here
+```
+
 ---
 
 ## Starten
@@ -52,6 +59,8 @@ Alle instellingen staan in `config/default.yaml`. De meest relevante opties:
 | `ocr.keywords` | Tekst die herkend moet worden voor een OK-beoordeling |
 
 Voor de Roboflow-backend: sla de API-sleutel op als omgevingsvariabele (`ROBOFLOW_API_KEY`) en verwijs daar in de config naar, zodat de sleutel niet in de repository staat.
+
+Voor onderhoudsfuncties: zet het wachtwoord in `MAINTENANCE_PASSWORD` in plaats van in `config/default.yaml`.
 
 ---
 
