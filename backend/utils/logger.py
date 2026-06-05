@@ -1,3 +1,10 @@
+"""
+Logging Configuration
+
+Sets up the application's logging system, providing console and file output 
+with custom filtering for web server noise.
+"""
+
 import logging
 import re
 from pathlib import Path
@@ -48,5 +55,8 @@ def setup_logging():
 
 
 def get_logger(name):
+    """
+    Returns a logger instance with the specified name.
+    """
     return logging.getLogger(name)
 
