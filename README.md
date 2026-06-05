@@ -135,14 +135,33 @@ Inspectieresultaten worden per dag opgeslagen in `data/results/` als JSONL-besta
 
 | Document | Inhoud |
 |---|---|
-| `docs/ARCHITECTURE.md` | Systeemarchitectuur en threading-model |
-| `docs/CONFIGURATION.md` | Alle configuratie-opties |
-| `docs/API.md` | REST API-endpoints |
-| `docs/DEPLOYMENT.md` | Installatie op productie-PC |
-| `docs/DEVELOPMENT.md` | Uitbreiden en debuggen |
-| `docs/classifier-and-object-detection.md` | Modeltraining en backend-keuze |
+| `docs/architecture.md` | Systeemarchitectuur, threading-model en data flow |
+| `docs/configuration.md` | Alle configuratie-opties in detail |
+| `docs/development.md` | Uitbreiden en debuggen; debugging-instructies |
+| `docs/classifier-and-object-detection.md` | Modeltraining en backend-keuze (classifier, YOLO, Roboflow, template) |
+| `docs/project-map.md` | Compleet projectoverzicht met alle modules en functies |
+| `docs/roadmap.md` | Toekomstige verbeteringen en plannen |
 
 ---
 
+## Testen
+
+Eenheidstests en integratietests draaien met:
+
+```powershell
+# Alle tests
+python -m unittest discover -s tests -p "test_*.py"
+
+# Specifieke test-module
+python -m unittest tests.test_unit_core
+python -m unittest tests.test_integration_vision_pipeline
+```
+
+Bestaande tests:
+- `tests/test_unit_core.py` – Eenheidstests voor `AppState` en `InspectionEngine`
+- `tests/test_integration_vision_pipeline.py` – Integratietests voor vision pipeline en resultaatopslag
+- `tests/test_inspection_pipeline.py` – Legacy handmatige tests met validatie
+
+---
 
 *Ontwikkeld tijdens afstudeerstage bij MDE Automation, februari–juni 2026.*
