@@ -1,18 +1,10 @@
 # Roadmap – VisionSoftwareMDE
 
-Dit document beschrijft bekende verbeterpunten en mogelijke uitbreidingen. Items zijn verdeeld in **nu op te lossen** (kleine bugs of veiligheidsrisico's) en **toekomstige doorontwikkeling** (features voor na de oplevering).
+Dit document beschrijft bekende verbeterpunten en mogelijke uitbreidingen. Items zijn verdeeld in **nu op te lossen** (kleine bugs) en **toekomstige doorontwikkeling** (features voor na de oplevering).
 
 ---
 
-## Nu op te lossen (voor of direct na oplevering)
-
-### Beveiliging – API-sleutel in config
-**Probleem:** De Roboflow API-sleutel (`<redacted>`) stond als plaintext in `config/default.yaml` en daarmee in de Git-repository.  
-**Oplossing:** Sleutel verplaatsen naar een omgevingsvariabele (`ROBOFLOW_API_KEY`) en in de config verwijzen met `${ROBOFLOW_API_KEY}`. Voeg `.env` toe aan `.gitignore`.
-
-### Beveiliging – Maintenance-wachtwoord in config
-**Probleem:** Het maintenance-wachtwoord (`<redacted>`) stond als plaintext in de config.  
-**Oplossing:** Zelfde aanpak als de API-sleutel: omgevingsvariabele of aparte secrets-file buiten de repository.
+## Nu op te lossen (direct na oplevering)
 
 ### Bug – Foutlogging bij camerafout (FTC 45)
 **Probleem:** Wanneer de camera wegvalt tijdens een inspectiecyclus, wordt de fout niet altijd correct gelogd naar `data/logs/`.  

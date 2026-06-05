@@ -625,7 +625,7 @@ python -m pytest tests/camera_test.py -m "not requires_camera" -v
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) (if available) for contribution guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (not yet available) for contribution guidelines.
 
 General workflow:
 1. Fork repository
