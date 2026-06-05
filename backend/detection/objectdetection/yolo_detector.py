@@ -1,3 +1,10 @@
+"""
+YOLO Object Detection Module
+
+Provides functions to run YOLOv8 inference for object detection and Region of 
+Interest (ROI) extraction.
+"""
+
 import os
 import threading
 import time
