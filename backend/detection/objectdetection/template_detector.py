@@ -1,3 +1,11 @@
+"""
+Template Matching Detector
+
+Provides the TemplateDetector class which uses OpenCV template matching and 
+Structural Similarity Index (SSIM) to verify the presence of objects based on 
+reference images.
+"""
+
 import time
 import cv2
 import numpy as np
@@ -12,6 +20,10 @@ except Exception:
 
 
 class TemplateDetector:
+    """
+    Detection engine that compares input frames against a set of reference 
+    images using SSIM and template matching.
+    """
     def __init__(self, reference_paths: list[str], match_threshold: float = 0.6, display_label: str = ""):
         self.logger = get_logger(__name__)
         self.match_threshold = float(match_threshold)
@@ -59,6 +71,9 @@ class TemplateDetector:
         return np.ascontiguousarray(img)
 
     def detect(self, frame: np.ndarray) -> dict:
+        """
+        Runs template matching on the input frame and returns the best match result.
+        """
         start = time.perf_counter()
 
         try:
@@ -163,6 +178,9 @@ class TemplateDetector:
             }
 
     def is_loaded(self) -> bool:
+        """
+        Checks if any reference images were successfully loaded.
+        """
         return len(self.references) > 0
 
 
