@@ -17,6 +17,12 @@ logger = get_logger(__name__)
 
 
 class TCPTriggerServer:
+    """
+    TCP server that listens for triggers from external devices (e.g., PLCs).
+    
+    When a trigger byte is received, it captures a frame, runs vision 
+    processing, and returns an OK/NOK response.
+    """
     def __init__(self, camera, run_vision_fn, process_result_fn):
         self.camera = camera
         self.run_vision_fn = run_vision_fn
@@ -35,6 +41,9 @@ class TCPTriggerServer:
         self._stop_event = threading.Event()
 
     def start(self):
+        """
+        Starts the TCP server in a background thread if enabled in configuration.
+        """
         if not self.enabled:
             logger.info("TCP trigger disabled, skipping")
             return
@@ -45,10 +54,16 @@ class TCPTriggerServer:
         logger.info("TCP trigger server started on %s:%s", self.host, self.port)
 
     def stop(self):
+        """
+        Signals the server thread to stop and closes the server.
+        """
         self._stop_event.set()
         logger.info("TCP trigger server stopped")
 
     def _serve(self):
+        """
+        Main server loop that accepts incoming TCP connections.
+        """
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -77,6 +92,9 @@ class TCPTriggerServer:
                 pass
 
     def _handle_connection(self, conn, addr):
+        """
+        Handles an individual PLC connection, listening for trigger bytes.
+        """
         try:
             conn.settimeout(None)
             while True:
@@ -112,6 +130,9 @@ class TCPTriggerServer:
                 logger.info("PLC disconnected: %s", addr)
 
     def _trigger_vision_and_wait(self) -> bytes:
+        """
+        Triggers vision processing and waits for the result to return a response byte.
+        """
         result_holder = []
         done_event = threading.Event()
 

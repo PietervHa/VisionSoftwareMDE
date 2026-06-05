@@ -1,3 +1,9 @@
+"""
+PaddleOCR Integration
+
+Provides the PaddleOCR class for text recognition using the PaddleOCR engine.
+"""
+
 import cv2
 import re
 import time
@@ -18,6 +24,9 @@ os.environ['FLAGS_use_mkldnn'] = '0'
 
 
 class PaddleOCR:
+    """
+    OCR engine based on PaddleOCR for identifying keywords and dates in frames.
+    """
     def __init__(self, app_state=None):
         self.app_state = app_state
         self._paddle = _PaddleOCR(lang="en")
@@ -90,6 +99,9 @@ class PaddleOCR:
         return apply_roi(frame, roi)
 
     def run(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+        """
         profile_data = {} if profile else None
 
         t0 = time.perf_counter()

@@ -1,3 +1,11 @@
+"""
+Vision Orchestration Module
+
+This module serves as the primary entry point for vision tasks, coordinating between
+different detection engines (OCR, Object Detection/Classification) and managing
+the communication with the application state.
+"""
+
 from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -14,22 +22,31 @@ logger = get_logger(__name__)
 # Backward-compatible alias; primary source is cfg["vision_mode"].
 VISION_MODE = cfg["vision_mode"]
 
+# Global instances managed by this module
 ocr_instance = OCR()
 _inspection_engine: Optional[InspectionEngine] = None
 _app_state: Optional[Any] = None
 _cached_vision_mode: str = cfg.get("vision_mode", "object_detection")
 
+# A single-threaded pool to process vision tasks sequentially without blocking the main loop
 _pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vision_worker")
 
 
 def _resolve_model_path(model_path: str) -> Path:
+    """
+    Resolves a model path, handling both absolute and relative paths relative to the project root.
+    """
     resolved = Path(model_path)
     if not resolved.is_absolute():
+        # Resolve relative to the project root (assumed 2 levels up from backend/core)
         resolved = Path(__file__).resolve().parents[2] / resolved
     return resolved.resolve()
 
 
 def _sync_classifier_state(model_path: str, loaded: bool) -> None:
+    """
+    Updates the shared application state with the current classifier loading status.
+    """
     app_state = _app_state
     if app_state is None or not hasattr(app_state, "set_classifier_loaded"):
         return
@@ -37,6 +54,9 @@ def _sync_classifier_state(model_path: str, loaded: bool) -> None:
 
 
 def bind_app_state(app_state) -> None:
+    """
+    Connects the vision module to the application state and initializes detection engines.
+    """
     global ocr_instance, _inspection_engine, _app_state, _cached_vision_mode
     _app_state = app_state
     _cached_vision_mode = cfg.get("vision_mode", "object_detection")
@@ -63,6 +83,9 @@ def bind_app_state(app_state) -> None:
 
 
 def load_classifier(model_path: str) -> bool:
+    """
+    Programmatically loads a classifier model into the inspection engine.
+    """
     engine = _inspection_engine
     if engine is None:
         return False
@@ -73,6 +96,11 @@ def load_classifier(model_path: str) -> bool:
 
 
 def _normalize_detections(result: dict, mode: str) -> list:
+    """
+    Ensures that detection results have a consistent format across different backends.
+    """
+    # Every backend should expose detections in a consistent list shape so the
+    # UI and PLC logic do not need backend-specific branches.
     detections = result.get("detections")
     if isinstance(detections, list):
         normalized = [d for d in detections if isinstance(d, dict)]
@@ -92,6 +120,9 @@ def _normalize_detections(result: dict, mode: str) -> list:
 
 
 def _get_active_threshold() -> float:
+    """
+    Retrieves the current confidence threshold from app state or configuration.
+    """
     app_state = _app_state
     if app_state is not None and hasattr(app_state, "get_threshold"):
         try:
@@ -102,6 +133,9 @@ def _get_active_threshold() -> float:
 
 
 def _extract_confidence(normalized: dict) -> float:
+    """
+    Determines the overall confidence for a result, usually the highest confidence among detections.
+    """
     if "confidence" in normalized:
         try:
             return float(normalized.get("confidence", 0.0))
@@ -123,6 +157,9 @@ def _extract_confidence(normalized: dict) -> float:
 
 
 def _normalize_result(result: dict, mode: str) -> dict:
+    """
+    Standardizes the result dictionary, calculating status based on confidence and thresholds.
+    """
     normalized = dict(result or {})
     normalized.setdefault("mode", mode)
     normalized["detections"] = _normalize_detections(normalized, mode)
@@ -147,6 +184,9 @@ def _normalize_result(result: dict, mode: str) -> dict:
 
 
 def _run_object_detection(frame):
+    """
+    Internal wrapper to run object detection or classification via the InspectionEngine.
+    """
     engine = _inspection_engine
     if engine is None:
         # Fallback to legacy output if engine is unavailable, but always return status.
@@ -158,11 +198,16 @@ def _run_object_detection(frame):
 
 
 def _run_with_callback(fn, frame, callback, mode: str, profile: bool = False) -> None:
+    """
+    Executes a vision function asynchronously in a background thread and returns the result via a callback.
+    """
     def worker():
         start = time.perf_counter()
         result = None
         exception_msg = None
         try:
+            # The worker runs the selected backend off the main thread so the
+            # caller can continue immediately while the result is prepared.
             result = fn(frame, profile=profile) if profile else fn(frame)
         except Exception as exc:
             exception_msg = str(exc)
@@ -183,6 +228,13 @@ def _run_with_callback(fn, frame, callback, mode: str, profile: bool = False) ->
 
 
 def run_vision(frame, callback=None, profile: bool = False):
+    """
+    The main entry point for running a vision task on a frame.
+    
+    Supports both synchronous and asynchronous (via callback) execution.
+    """
+    # The active mode is resolved from app state first so runtime changes win
+    # over the cached startup configuration.
     mode_getter = getattr(_app_state, "get_vision_mode", None)
     mode = mode_getter() if callable(mode_getter) else _cached_vision_mode
 

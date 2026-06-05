@@ -1,3 +1,10 @@
+"""
+Camera Management Module
+
+Provides the Camera class for asynchronous frame capture, supporting various 
+rotations and flipping based on configuration and application state.
+"""
+
 import cv2
 import threading
 import time
@@ -9,7 +16,10 @@ log = get_logger(__name__)
 TARGET = 1 / 30  # Target time per frame for ~30 FPS
 
 class Camera:
-    def __init__(self, index=0, app_state=None):  # <- change index
+    """
+    Asynchronous camera interface that captures frames in a background thread.
+    """
+    def __init__(self, index=0, app_state=None):
         cam_cfg = cfg["camera"]
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
         self.app_state = app_state
@@ -39,6 +49,9 @@ class Camera:
 
 
     def _update(self):
+        """
+        Internal worker thread that continuously reads frames from the camera.
+        """
         while self.running:
             t0 = time.perf_counter()
             ret, frame = self.cap.read()
@@ -64,11 +77,17 @@ class Camera:
 
 
     def get_frame(self):
+        """
+        Retrieves a thread-safe copy of the latest captured frame.
+        """
         with self.lock:
             return None if self.latest_frame is None else self.latest_frame.copy()
 
 
     def release(self):
+        """
+        Stops the update thread and releases the camera hardware.
+        """
         log.info("Camera release called")
         self.running = False
         self.cap.release()
