@@ -1,4 +1,10 @@
 import pytesseract
+"""
+Tesseract OCR Integration
+
+Provides the TesseractOCR class for text recognition using the Tesseract engine.
+"""
+
 import cv2
 import re
 import time
@@ -12,6 +18,9 @@ pytesseract.pytesseract.tesseract_cmd = cfg["ocr"]["tesseract_path"]
 
 
 class TesseractOCR:
+    """
+    OCR engine based on Tesseract for identifying keywords and dates in frames.
+    """
     def __init__(self, app_state=None):
         self.app_state = app_state
         self.languages = "eng"
@@ -117,6 +126,9 @@ class TesseractOCR:
         return apply_roi(frame, roi)
 
     def run(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+        """
         profile_data = {} if profile else None
 
         t0 = time.perf_counter()

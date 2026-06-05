@@ -1,3 +1,9 @@
+"""
+Result Writer
+
+Handles saving vision processing results to disk in JSONL format, organized by date.
+"""
+
 import json
 import threading
 from datetime import datetime
@@ -16,6 +22,9 @@ if not _output_dir.is_absolute():
 
 
 def save_result(result: dict):
+    """
+    Saves a vision processing result to a daily JSONL file.
+    """
     now = datetime.now()
 
     with _write_lock:

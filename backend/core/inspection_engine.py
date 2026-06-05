@@ -1,3 +1,10 @@
+"""
+Inspection Engine
+
+This module provides the InspectionEngine class which abstracts various object 
+detection and classification backends (Local Classifier, Roboflow, YOLO, Template Matching).
+"""
+
 from __future__ import annotations
 import os
 import tempfile
@@ -11,6 +18,9 @@ from backend.utils.logger import get_logger
 logger = get_logger(__name__)
 
 class InspectionEngine:
+    """
+    Orchestrates the inspection process using a selected detection backend.
+    """
     def __init__(self, app_state):
         self.app_state = app_state
         self._classifier = None
@@ -18,6 +28,8 @@ class InspectionEngine:
         self._template_detector = None
 
         od_cfg = cfg.get("object_detection", {})
+        # The backend can switch between local and remote detectors without
+        # changing the rest of the inspection pipeline.
         backend = str(od_cfg.get("backend", "classifier")).strip().lower()
         if backend not in {"classifier", "roboflow", "yolo", "template"}:
             logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
@@ -37,6 +49,9 @@ class InspectionEngine:
             self._init_template_detector()
 
     def _init_template_detector(self):
+        """
+        Initializes the template matching detector with references from configuration.
+        """
         od_cfg = cfg.get("object_detection", {})
         template_cfg = od_cfg.get("template", {}) if isinstance(od_cfg.get("template"), dict) else {}
         reference_paths = list(template_cfg.get("references", []))
@@ -69,6 +84,9 @@ class InspectionEngine:
             self._template_detector = None
 
     def _init_roboflow_detector(self) -> None:
+        """
+        Initializes the Roboflow Inference client.
+        """
         od_cfg = cfg.get("object_detection", {})
         roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
         api_key = str(os.environ.get("ROBOFLOW_API_KEY", "")).strip()
@@ -99,6 +117,9 @@ class InspectionEngine:
             self._roboflow_client = None
 
     def load_classifier(self, model_path: str) -> bool:
+        """
+        Loads a local ImageClassifier model.
+        """
         if self._detector_backend == "roboflow":
             return self._roboflow_client is not None
         if self._detector_backend == "yolo":
@@ -123,6 +144,9 @@ class InspectionEngine:
 
     @staticmethod
     def _parse_detection_item(item: dict) -> dict:
+        """
+        Extracts label and confidence from various detection item formats.
+        """
         label = str(
             item.get("class")
             or item.get("class_name")
@@ -145,6 +169,11 @@ class InspectionEngine:
 
     @staticmethod
     def _extract_predictions(payload: dict) -> list:
+        """
+        Parses Roboflow response payloads to find the predictions list.
+        """
+        # Roboflow-style responses are not always shaped the same, so we
+        # inspect the common variants before giving up.
         direct = payload.get("predictions")
         if isinstance(direct, list):
             return [p for p in direct if isinstance(p, dict)]
@@ -168,9 +197,14 @@ class InspectionEngine:
         return []
 
     def _run_roboflow_workflow(self, frame):
+        """
+        Sends a frame to Roboflow for workflow execution.
+        """
         if self._roboflow_client is None:
             raise RuntimeError("roboflow_detector_unavailable")
 
+        # The SDK expects a file path, so we write the frame to a temporary
+        # image and clean it up immediately after the request finishes.
         fd, temp_path = tempfile.mkstemp(suffix=".jpg")
         os.close(fd)
 
@@ -193,6 +227,9 @@ class InspectionEngine:
                 pass
 
     def _evaluate_with_roboflow(self, frame, start_time: float) -> dict:
+        """
+        Executes Roboflow workflow and parses the results.
+        """
         raw_result = self._run_roboflow_workflow(frame)
 
         payload: dict
@@ -234,6 +271,9 @@ class InspectionEngine:
         }
 
     def evaluate(self, frame) -> dict:
+        """
+        Main evaluation entry point. Routes to the appropriate backend.
+        """
         start_time = time.perf_counter()
 
         if self._detector_backend == "roboflow":
@@ -254,6 +294,8 @@ class InspectionEngine:
             try:
                 from backend.detection.objectdetection import run_object_detection
 
+                # YOLO shares the same output contract as the other detectors,
+                # so callers can treat all backends uniformly.
                 result = run_object_detection(frame)
                 result.setdefault("mode", "object_detection")
                 return result
@@ -296,12 +338,12 @@ class InspectionEngine:
             pil_image = preprocess_to_pil(frame, size=224)
             prediction = self._classifier.predict(pil_image)
             threshold = self.app_state.get_threshold()
-            
+
             # Map classifier label "ok" to "non-defective" for display
             label = prediction["label"]
             if label.lower() == "ok":
                 label = "non-defective"
-            
+
             # Determine status based on threshold and confidence (ok/non-defective = OK status)
             status = "OK" if prediction["confidence"] >= threshold and prediction["label"].lower() == "ok" else "NOK"
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
@@ -325,6 +367,9 @@ class InspectionEngine:
             }
 
     def has_model(self) -> bool:
+        """
+        Checks if the current detector backend is properly initialized/loaded.
+        """
         if self._detector_backend == "roboflow":
             return self._roboflow_client is not None
         if self._detector_backend == "yolo":
