@@ -1,3 +1,11 @@
+"""
+Main Entry Point
+
+This module orchestrates the entire vision application, including camera 
+management, vision processing, the TCP trigger server for PLC integration, 
+and the web interface.
+"""
+
 import threading
 import keyboard
 from backend.core.camera import Camera
@@ -14,7 +22,12 @@ log = get_logger(__name__)
 _vision_busy = threading.Event()
 
 def _process_vision_result(result, trigger_time, app_state):
-    """Callback to handle vision results from background thread"""
+    """
+    Callback to handle vision results from background thread.
+    
+    Calculates cycle time, updates the application state, increments counters, 
+    and saves the result to disk.
+    """
     try:
         # Calculate total cycle time from trigger to result
         cycle_time_ms = round((time.perf_counter() - trigger_time) * 1000, 1)
@@ -49,6 +62,12 @@ def _process_vision_result(result, trigger_time, app_state):
         log.error("Failed to process vision result: %s", exc)
 
 def vision_trigger_loop(camera, app_state):
+    """
+    Manual trigger loop that listens for keyboard input to start a vision cycle.
+    
+    Pressing 'q' triggers the camera to capture a frame and starts vision 
+    processing in a background thread.
+    """
     global _vision_busy
     log.info("Press Q to trigger vision. Ctrl+C to exit.")
 
@@ -84,6 +103,11 @@ def vision_trigger_loop(camera, app_state):
             log.error("Vision trigger loop error: %s", exc)
 
 def main():
+    """
+    Initializes and starts all core components of the application.
+    
+    Sets up logging, application state, camera, web server, and TCP trigger server.
+    """
     setup_logging()
     app_state = AppState()
     bind_app_state(app_state)
