@@ -3,6 +3,8 @@ from backend.core.config_loader import cfg
 
 class AppState:
     def __init__(self):
+        # The lock keeps camera, vision, and web threads from reading/writing
+        # shared state at the same time.
         self.lock = threading.Lock()
         self.latest_result = {
             "detections": [],
@@ -114,7 +116,8 @@ class AppState:
 
         loaded = False
         try:
-            # Keep state as orchestrator metadata; actual load happens in vision module.
+            # Keep state as orchestrator metadata; the actual model load happens
+            # inside the vision module so the state object stays lightweight.
             from backend.core import vision
 
             loader = getattr(vision, "load_classifier", None)

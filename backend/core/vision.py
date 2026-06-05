@@ -73,6 +73,8 @@ def load_classifier(model_path: str) -> bool:
 
 
 def _normalize_detections(result: dict, mode: str) -> list:
+    # Every backend should expose detections in a consistent list shape so the
+    # UI and PLC logic do not need backend-specific branches.
     detections = result.get("detections")
     if isinstance(detections, list):
         normalized = [d for d in detections if isinstance(d, dict)]
@@ -163,6 +165,8 @@ def _run_with_callback(fn, frame, callback, mode: str, profile: bool = False) ->
         result = None
         exception_msg = None
         try:
+            # The worker runs the selected backend off the main thread so the
+            # caller can continue immediately while the result is prepared.
             result = fn(frame, profile=profile) if profile else fn(frame)
         except Exception as exc:
             exception_msg = str(exc)
@@ -183,6 +187,8 @@ def _run_with_callback(fn, frame, callback, mode: str, profile: bool = False) ->
 
 
 def run_vision(frame, callback=None, profile: bool = False):
+    # The active mode is resolved from app state first so runtime changes win
+    # over the cached startup configuration.
     mode_getter = getattr(_app_state, "get_vision_mode", None)
     mode = mode_getter() if callable(mode_getter) else _cached_vision_mode
 

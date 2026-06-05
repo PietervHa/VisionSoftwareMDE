@@ -18,6 +18,8 @@ class InspectionEngine:
         self._template_detector = None
 
         od_cfg = cfg.get("object_detection", {})
+        # The backend can switch between local and remote detectors without
+        # changing the rest of the inspection pipeline.
         backend = str(od_cfg.get("backend", "classifier")).strip().lower()
         if backend not in {"classifier", "roboflow", "yolo", "template"}:
             logger.warning("Unknown detector backend '%s'; falling back to 'classifier'", backend)
@@ -145,6 +147,8 @@ class InspectionEngine:
 
     @staticmethod
     def _extract_predictions(payload: dict) -> list:
+        # Roboflow-style responses are not always shaped the same, so we
+        # inspect the common variants before giving up.
         direct = payload.get("predictions")
         if isinstance(direct, list):
             return [p for p in direct if isinstance(p, dict)]
@@ -171,6 +175,8 @@ class InspectionEngine:
         if self._roboflow_client is None:
             raise RuntimeError("roboflow_detector_unavailable")
 
+        # The SDK expects a file path, so we write the frame to a temporary
+        # image and clean it up immediately after the request finishes.
         fd, temp_path = tempfile.mkstemp(suffix=".jpg")
         os.close(fd)
 
@@ -254,6 +260,8 @@ class InspectionEngine:
             try:
                 from backend.detection.objectdetection import run_object_detection
 
+                # YOLO shares the same output contract as the other detectors,
+                # so callers can treat all backends uniformly.
                 result = run_object_detection(frame)
                 result.setdefault("mode", "object_detection")
                 return result
@@ -296,12 +304,12 @@ class InspectionEngine:
             pil_image = preprocess_to_pil(frame, size=224)
             prediction = self._classifier.predict(pil_image)
             threshold = self.app_state.get_threshold()
-            
+
             # Map classifier label "ok" to "non-defective" for display
             label = prediction["label"]
             if label.lower() == "ok":
                 label = "non-defective"
-            
+
             # Determine status based on threshold and confidence (ok/non-defective = OK status)
             status = "OK" if prediction["confidence"] >= threshold and prediction["label"].lower() == "ok" else "NOK"
             processing_time_ms = round((time.perf_counter() - start_time) * 1000, 3)
