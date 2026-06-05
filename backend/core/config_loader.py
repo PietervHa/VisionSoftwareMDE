@@ -1,11 +1,29 @@
 import sys
 import argparse
 import logging
+import os
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 log = logging.getLogger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(_PROJECT_ROOT / ".env")
+
+
+def _warn_missing_env_vars() -> None:
+    missing = []
+    for env_name in ("ROBOFLOW_API_KEY", "MAINTENANCE_PASSWORD"):
+        if not str(os.environ.get(env_name, "")).strip():
+            missing.append(env_name)
+
+    if missing:
+        log.warning(
+            "Missing environment variables: %s. Set them in the project root .env file or your environment.",
+            ", ".join(missing),
+        )
 
 """
 Configuration loader for the machine vision application.
@@ -88,22 +106,20 @@ def _normalize_object_detection_config(config: dict) -> dict:
     roboflow_models = roboflow_cfg.get("models") if isinstance(roboflow_cfg.get("models"), dict) else {}
     selected_profile = _as_dict(roboflow_models.get(roboflow_model))
 
-    roboflow_api_key = str(_first_non_empty(selected_profile.get("api_key"))).strip()
+    roboflow_api_key = str(os.environ.get("ROBOFLOW_API_KEY", "")).strip()
     roboflow_workspace = str(_first_non_empty(selected_profile.get("workspace"))).strip()
     roboflow_workflow = str(_first_non_empty(selected_profile.get("workflow"))).strip()
     roboflow_api_url = str(
         _first_non_empty(selected_profile.get("api_url"), default="https://serverless.roboflow.com")
     ).strip()
+    selected_profile["api_key"] = roboflow_api_key
+    selected_profile["workspace"] = roboflow_workspace
+    selected_profile["workflow"] = roboflow_workflow
+    selected_profile["api_url"] = roboflow_api_url
 
     if not isinstance(roboflow_models, dict):
         roboflow_models = {}
-    if roboflow_model not in roboflow_models:
-        roboflow_models[roboflow_model] = {
-            "api_key": roboflow_api_key,
-            "workspace": roboflow_workspace,
-            "workflow": roboflow_workflow,
-            "api_url": roboflow_api_url,
-        }
+    roboflow_models[roboflow_model] = selected_profile
 
     normalized["roboflow"] = {
         "model": roboflow_model,
@@ -114,12 +130,16 @@ def _normalize_object_detection_config(config: dict) -> dict:
         "api_url": roboflow_api_url,
     }
 
+    security_cfg = _as_dict(config.get("security"))
+    security_cfg["maintenance_password"] = str(os.environ.get("MAINTENANCE_PASSWORD", "")).strip()
+    config["security"] = security_cfg
+
     config["object_detection"] = normalized
     return config
 
 
 def _validate_object_detection_config(config: dict) -> None:
-    """Fail fast if Roboflow backend is selected but config is incomplete."""
+    """Warn if Roboflow backend is selected but config is incomplete."""
     od_cfg = config.get("object_detection", {})
     if not isinstance(od_cfg, dict):
         return
@@ -130,46 +150,54 @@ def _validate_object_detection_config(config: dict) -> None:
 
     roboflow_cfg = od_cfg.get("roboflow", {})
     if not isinstance(roboflow_cfg, dict):
-        raise ValueError("object_detection.roboflow must be a dict when backend='roboflow'")
+        log.warning("object_detection.roboflow must be a dict when backend='roboflow'")
+        return
 
     selected_model = str(roboflow_cfg.get("model", "")).strip()
     if not selected_model:
-        raise ValueError("object_detection.roboflow.model is required when backend='roboflow'")
+        log.warning("object_detection.roboflow.model is required when backend='roboflow'")
+        return
 
     roboflow_models = roboflow_cfg.get("models", {})
     if not isinstance(roboflow_models, dict):
-        raise ValueError("object_detection.roboflow.models must be a dict")
+        log.warning("object_detection.roboflow.models must be a dict when backend='roboflow'")
+        return
 
     if selected_model not in roboflow_models:
         available = list(roboflow_models.keys())
-        raise ValueError(
+        log.warning(
             f"Roboflow model '{selected_model}' not found in roboflow.models. "
             f"Available models: {available}"
         )
+        return
 
     model_profile = roboflow_models[selected_model]
     if not isinstance(model_profile, dict):
-        raise ValueError(f"roboflow.models.{selected_model} must be a dict")
+        log.warning("roboflow.models.%s must be a dict", selected_model)
+        return
 
     required_fields = {"api_key", "workspace", "workflow"}
     missing = required_fields - set(model_profile.keys())
     if missing:
-        raise ValueError(
+        log.warning(
             f"Roboflow model '{selected_model}' profile is incomplete. "
             f"Missing required fields: {missing}. "
             f"All of {required_fields} are required."
         )
+        return
 
     for field in required_fields:
         value = str(model_profile.get(field, "")).strip()
         if not value:
-            raise ValueError(
+            log.warning(
                 f"Roboflow model '{selected_model}' has empty required field '{field}'. "
                 f"All required fields must have non-empty values."
             )
+            return
 
 
 # Load configuration at module level
+_warn_missing_env_vars()
 cfg = _load_config()
 cfg = _normalize_object_detection_config(cfg)
 _validate_object_detection_config(cfg)

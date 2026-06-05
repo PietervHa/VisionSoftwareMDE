@@ -67,3 +67,6 @@ tests/**/__pycache__/
 
 benchmarks/
 data/
+
+.env
+

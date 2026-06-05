@@ -42,17 +42,49 @@ class TesseractOCR:
         )
 
     def _preprocess_image(self, gray):
-        """Enhance image contrast and clarity for faster OCR"""
+        """Enhance image contrast and clarity for Tesseract.
+
+        Changes vs original:
+        - Upscale small ROIs: Tesseract accuracy drops sharply when text
+          height is below ~30 px; 2x cubic upscaling fixes most cases.
+        - Default mode now uses adaptive thresholding instead of CLAHE+blur.
+          Adaptive threshold handles uneven/coloured backgrounds reliably;
+          Otsu and CLAHE+blur both struggle when text/background contrast
+          is low in the grayscale domain (e.g. black text on dark red).
+        """
         mode = self.preprocess_mode
         if mode == "off":
             return gray
+
+        # Upscale if the shorter dimension is small – keeps text sharp for Tesseract
+        h, w = gray.shape[:2]
+        short = min(h, w)
+        if short < 80:
+            scale = max(2, int(160 / short))
+            gray = cv2.resize(gray, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+        elif short < 200:
+            gray = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+
         if mode == "fast":
             _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             return binary
 
-        enhanced = self._clahe.apply(gray)
-        denoised = cv2.medianBlur(enhanced, 3)
-        return denoised
+        # Default mode: adaptive Gaussian threshold
+        # blockSize must be odd and large enough to span a character; C is the
+        # constant subtracted from the local mean (tune higher = more aggressive).
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        binary = cv2.adaptiveThreshold(
+            blurred, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=31,
+            C=10
+        )
+        # Tesseract expects dark text on a white background.
+        # If the image is mostly dark (inverted polarity), flip it.
+        if cv2.countNonZero(binary) < binary.size * 0.3:
+            binary = cv2.bitwise_not(binary)
+        return binary
 
     def _downscale_roi(self, gray):
         if self.downscale >= 1.0:
@@ -93,7 +125,14 @@ class TesseractOCR:
             profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
         t1 = time.perf_counter()
-        gray = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2GRAY) if len(roi_frame.shape) == 3 else roi_frame
+        # Use the BGR channel with the highest standard deviation as grayscale.
+        # This gives much better contrast than the standard luminance blend when
+        # text sits on a strongly-coloured background (e.g. black on dark red).
+        if len(roi_frame.shape) == 3:
+            channels = cv2.split(roi_frame)          # B, G, R
+            gray = max(channels, key=lambda c: float(c.std()))
+        else:
+            gray = roi_frame
         if profile_data is not None:
             profile_data["grayscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
 
@@ -131,6 +170,8 @@ class TesseractOCR:
         texts = data.get("text", [])
         confs = data.get("conf", [])
 
+        # --- Collect valid tokens (confidence >= 0, non-empty) ---
+        valid_tokens = []
         t5 = time.perf_counter()
         for i, text in enumerate(texts):
             if not text.strip():
@@ -141,14 +182,47 @@ class TesseractOCR:
                 conf = -1.0
             if conf < 0:
                 continue
-            word = text.lower()
-            if keyword_set and word not in keyword_set:
+            valid_tokens.append((text, conf))
+
+        # Build the full recognised line for phrase-level matching.
+        # Tesseract image_to_data returns one token per call, so a multi-word
+        # keyword like "User Manual" would never pass an exact per-token check.
+        full_text = " ".join(t for t, _ in valid_tokens).lower()
+        avg_conf  = (sum(c for _, c in valid_tokens) / len(valid_tokens)) if valid_tokens else 0.0
+
+        # Keep an original-cased version for reporting
+        original_full = " ".join(t for t, _ in valid_tokens)
+
+        if keyword_set:
+            # 1. Phrase-level check – preferred path
+            #    full_text is lowercased; original_full preserves OCR casing.
+            #    We report the original-cased slice so the detection text
+            #    matches what Tesseract actually read (e.g. "User Manual",
+            #    not the lowercased keyword "user manual").
+            for kw in keyword_set:
+                idx = full_text.find(kw)
+                if idx >= 0:
+                    matched_text = original_full[idx: idx + len(kw)]
+                    detections.append({"text": matched_text, "confidence": round(avg_conf / 100, 3)})
+
+            # 2. Per-token fallback for split/partial results
+            #    Require len >= 2 to avoid single-char noise like "a" matching
+            #    as a substring of the keyword (e.g. "user mAnual").
+            if not detections:
+                for text, conf in valid_tokens:
+                    if len(text.strip()) < 2:
+                        continue
+                    word = text.lower()
+                    phrase_match = any(kw in word or word in kw for kw in keyword_set)
+                    date_match   = self._date_pattern and self._date_pattern.search(text)
+                    if phrase_match or date_match:
+                        detections.append({"text": text, "confidence": round(conf / 100, 3)})
+        else:
+            # No keyword filter – return all tokens that pass the date check
+            for text, conf in valid_tokens:
                 if self._date_pattern and not self._date_pattern.search(text):
                     continue
-            detections.append({
-                "text": text,
-                "confidence": conf / 100
-            })
+                detections.append({"text": text, "confidence": round(conf / 100, 3)})
         if profile_data is not None:
             profile_data["filter_ms"] = round((time.perf_counter() - t5) * 1000, 3)
             profile_data["total_ms"] = round(sum(profile_data.values()), 3)
