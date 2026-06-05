@@ -4,7 +4,7 @@
 # # 2. Connect to your workflow
 # client = InferenceHTTPClient(
 #     api_url="https://serverless.roboflow.com",
-#     api_key="SwXK94LMoGhQfZsk8xCG"
+#     api_key=os.environ.get("ROBOFLOW_API_KEY")
 # )
 #
 # # 3. Run your workflow on an image
@@ -21,13 +21,18 @@
 # print(result)
 
 import cv2
+import os
 from inference_sdk import InferenceHTTPClient
 from inference_sdk.webrtc import WebcamSource, StreamConfig, VideoMetadata
 
 # Initialize client
+api_key = os.environ.get("ROBOFLOW_API_KEY", "").strip()
+if not api_key:
+    raise RuntimeError("ROBOFLOW_API_KEY is not set")
+
 client = InferenceHTTPClient.init(
     api_url="https://serverless.roboflow.com",
-    api_key="SwXK94LMoGhQfZsk8xCG"
+    api_key=api_key
 )
 
 # Configure video source (webcam)

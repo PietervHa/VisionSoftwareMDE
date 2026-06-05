@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import date, datetime, timedelta
 import cv2
 from flask import Flask, Response, send_file
@@ -145,7 +146,7 @@ def create_app(camera, app_state):
 
     @app.route("/maintenance_password")
     def get_maintenance_password():
-        password = cfg.get("security", {}).get("maintenance_password", "")
+        password = os.environ.get("MAINTENANCE_PASSWORD", "")
         return jsonify({"maintenance_password": password})
 
     @app.route("/load_classifier", methods=["POST"])

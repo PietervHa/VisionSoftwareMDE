@@ -71,7 +71,7 @@ object_detection:
     model: "cola_detectie"
     models:
       cola_detectie:
-        api_key: "SwXK94LMoGhQfZsk8xCG"
+        api_key: "SET_VIA_ENV"
         workspace: "pieters-workspace-kugm8"
         workflow: "detect-count-and-visualize"
         api_url: "https://serverless.roboflow.com"
@@ -103,5 +103,5 @@ trigger:
 
 # Security settings
 security:
-  maintenance_password: "@Welkom01"  # Password required to enter maintenance mode
+  maintenance_password: "SET_VIA_ENV"  # Password required to enter maintenance mode
 

@@ -7,11 +7,11 @@ Dit document beschrijft bekende verbeterpunten en mogelijke uitbreidingen. Items
 ## Nu op te lossen (voor of direct na oplevering)
 
 ### Beveiliging – API-sleutel in config
-**Probleem:** De Roboflow API-sleutel (`SwXK94LMoGhQfZsk8xCG`) staat als plaintext in `config/default.yaml` en daarmee in de Git-repository.  
+**Probleem:** De Roboflow API-sleutel (`<redacted>`) stond als plaintext in `config/default.yaml` en daarmee in de Git-repository.  
 **Oplossing:** Sleutel verplaatsen naar een omgevingsvariabele (`ROBOFLOW_API_KEY`) en in de config verwijzen met `${ROBOFLOW_API_KEY}`. Voeg `.env` toe aan `.gitignore`.
 
 ### Beveiliging – Maintenance-wachtwoord in config
-**Probleem:** Het maintenance-wachtwoord (`@Welkom01`) staat als plaintext in de config.  
+**Probleem:** Het maintenance-wachtwoord (`<redacted>`) stond als plaintext in de config.  
 **Oplossing:** Zelfde aanpak als de API-sleutel: omgevingsvariabele of aparte secrets-file buiten de repository.
 
 ### Bug – Foutlogging bij camerafout (FTC 45)

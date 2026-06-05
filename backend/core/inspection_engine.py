@@ -71,7 +71,7 @@ class InspectionEngine:
     def _init_roboflow_detector(self) -> None:
         od_cfg = cfg.get("object_detection", {})
         roboflow_cfg = od_cfg.get("roboflow", {}) if isinstance(od_cfg.get("roboflow"), dict) else {}
-        api_key = str(roboflow_cfg.get("api_key", "")).strip()
+        api_key = str(os.environ.get("ROBOFLOW_API_KEY", "")).strip()
 
         if not api_key or not self._roboflow_workspace or not self._roboflow_workflow:
             logger.warning("Roboflow configuration is incomplete; detector will stay disabled")
