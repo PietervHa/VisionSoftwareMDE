@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import random
+import shutil
 from pathlib import Path
 from typing import Dict
 import torch
@@ -190,6 +191,9 @@ def main():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
+    best_val_accuracy = -1.0
+    best_epoch = None
+
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
         val_accuracy = evaluate(model, val_loader, device)
@@ -199,13 +203,22 @@ def main():
         checkpoint_dir = output_dir / f"epoch-{epoch}"
         save_artifacts(checkpoint_dir, model, processor)
 
-    final_dir = output_dir / "final"
-    save_artifacts(final_dir, model, processor)
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_epoch = epoch
 
-    print("Training complete. Model saved to models/classifier/final/")
+    final_dir = output_dir / "final"
+    best_checkpoint_dir = output_dir / f"epoch-{best_epoch}"
+
+    if final_dir.exists():
+        print(f"Bestaande '{final_dir.name}' map gevonden, wordt overschreven met epoch-{best_epoch}.")
+        shutil.rmtree(final_dir)
+    shutil.copytree(best_checkpoint_dir, final_dir)
+
+    print(f"Training complete. Best epoch: {best_epoch}/{args.epochs} (val_accuracy: {best_val_accuracy:.2f}%)")
+    print(f"Model saved to models/classifier/final/ (copy of epoch-{best_epoch})")
     print("To use this model, set classifier_model_path in config/default.yaml")
 
 
 if __name__ == "__main__":
     main()
-
