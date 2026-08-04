@@ -1,7 +1,7 @@
 """
 Logging Configuration
 
-Sets up the application's logging system, providing console and file output 
+Sets up the application's logging system, providing console and file output
 with custom filtering for web server noise.
 """
 
@@ -10,15 +10,30 @@ import re
 from pathlib import Path
 
 
-class _SuppressWerkzeugResultPollFilter(logging.Filter):
-    """Hide only routine /result polling lines from Werkzeug request logs."""
+class _SuppressResultPollFilter(logging.Filter):
+    """Hide only routine /result polling lines from web server request logs."""
 
     _pattern = re.compile(r'"?(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /result(?:\?|\s)')
 
     def filter(self, record):
-        if record.name != "werkzeug":
+        if record.name not in ("werkzeug", "uvicorn.access"):
             return True
         return not bool(self._pattern.search(record.getMessage()))
+
+
+# UVICORN_LOG_CONFIG
+
+UVICORN_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {},
+    "handlers": {},
+    "loggers": {
+        "uvicorn": {"level": "INFO", "propagate": True},
+        "uvicorn.error": {"level": "INFO", "propagate": True},
+        "uvicorn.access": {"level": "INFO", "propagate": True},
+    },
+}
 
 
 def setup_logging():
@@ -40,7 +55,7 @@ def setup_logging():
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
-    console_handler.addFilter(_SuppressWerkzeugResultPollFilter())
+    console_handler.addFilter(_SuppressResultPollFilter())
 
     file_handler = logging.FileHandler(logs_dir / "vision.log", encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
@@ -59,4 +74,3 @@ def get_logger(name):
     Returns a logger instance with the specified name.
     """
     return logging.getLogger(name)
-
