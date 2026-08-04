@@ -8,6 +8,7 @@ and the web interface.
 
 import threading
 import keyboard
+import uvicorn
 from backend.core.camera import Camera
 from backend.core.vision import run_vision, bind_app_state
 from backend.core.tcp_trigger_server import TCPTriggerServer
@@ -24,8 +25,8 @@ _vision_busy = threading.Event()
 def _process_vision_result(result, trigger_time, app_state):
     """
     Callback to handle vision results from background thread.
-    
-    Calculates cycle time, updates the application state, increments counters, 
+
+    Calculates cycle time, updates the application state, increments counters,
     and saves the result to disk.
     """
     try:
@@ -64,8 +65,8 @@ def _process_vision_result(result, trigger_time, app_state):
 def vision_trigger_loop(camera, app_state):
     """
     Manual trigger loop that listens for keyboard input to start a vision cycle.
-    
-    Pressing 'q' triggers the camera to capture a frame and starts vision 
+
+    Pressing 'q' triggers the camera to capture a frame and starts vision
     processing in a background thread.
     """
     global _vision_busy
@@ -105,7 +106,7 @@ def vision_trigger_loop(camera, app_state):
 def main():
     """
     Initializes and starts all core components of the application.
-    
+
     Sets up logging, application state, camera, web server, and TCP trigger server.
     """
     setup_logging()
@@ -118,7 +119,9 @@ def main():
         web_cfg = cfg["web"]
         app = create_app(camera, app_state)
         web_thread = threading.Thread(
-            target=lambda: app.run(host=web_cfg["host"], port=web_cfg["port"], threaded=True),
+            target=lambda: uvicorn.run(
+                app, host=web_cfg["host"], port=web_cfg["port"], log_level="warning"
+            ),
             daemon=True,
         )
         web_thread.start()

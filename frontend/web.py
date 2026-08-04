@@ -2,9 +2,11 @@ import json
 import os
 from datetime import date, datetime, timedelta
 import cv2
-from flask import Flask, Response, send_file
-from flask_cors import CORS
-from flask import jsonify, request
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from pathlib import Path
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
@@ -19,11 +21,47 @@ def _resolve_repo_path(path: str) -> Path:
     return resolved.resolve()
 
 
-def create_app(camera, app_state):
-    app = Flask(__name__)
-    CORS(app)
+class ThresholdBody(BaseModel):
+    threshold: float = 0.5
 
-    # shared DatasetCapture instance for the lifetime of this Flask app
+
+class MaintenanceModeBody(BaseModel):
+    maintenance_mode: bool = False
+
+
+class VisionModeBody(BaseModel):
+    vision_mode: str = ""
+
+
+class OcrKeywordBody(BaseModel):
+    ocr_keyword: str = ""
+
+
+class LoadClassifierBody(BaseModel):
+    model_path: str = ""
+
+
+class DatasetCaptureBody(BaseModel):
+    label: str = ""
+
+
+def create_app(camera, app_state) -> FastAPI:
+    app = FastAPI()
+
+    # flask-cors' CORS(app) defaults to allowing all origins/methods/headers
+    # without credentials; this mirrors that.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    # shared DatasetCapture instance for the lifetime of this app
     dataset_capture = DatasetCapture()
 
     JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
@@ -77,120 +115,119 @@ def create_app(camera, app_state):
             if remaining_ms > 0:
                 time.sleep(remaining_ms / 1000)
 
-    @app.route("/")
+    @app.get("/")
     def index():
         template_path = Path(__file__).resolve().parent / "templates" / "hmi.html"
-        return send_file(template_path)
+        return FileResponse(template_path)
 
-    @app.route("/status")
+    @app.get("/status")
     def get_status():
-        return jsonify({
+        return {
             "vision_mode": app_state.get_vision_mode(),
             "maintenance_mode": app_state.get_maintenance_mode(),
             "machine_id": cfg["machine_id"],
-            "version": "1.0.0"
-        })
+            "version": "1.0.0",
+        }
 
-    @app.route("/result")
+    @app.get("/result")
     def get_result():
-        return jsonify(app_state.get_snapshot())
+        return app_state.get_snapshot()
 
-    @app.route("/threshold")
+    @app.get("/threshold")
     def get_threshold():
-        return jsonify({"threshold": app_state.get_threshold()})
+        return {"threshold": app_state.get_threshold()}
 
-    @app.route("/threshold", methods=["POST"])
-    def set_threshold():
+    @app.post("/threshold")
+    def set_threshold(body: ThresholdBody):
         if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        new_value = float(data.get("threshold", 0.5))
-        app_state.set_threshold(new_value)
-        return jsonify({"threshold": app_state.get_threshold()})
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        app_state.set_threshold(body.threshold)
+        return {"threshold": app_state.get_threshold()}
 
-    @app.route("/maintenance_mode", methods=["POST"])
-    def set_maintenance_mode():
-        data = request.json or {}
-        app_state.set_maintenance_mode(data.get("maintenance_mode", False))
-        return jsonify({"maintenance_mode": app_state.get_maintenance_mode()})
+    @app.post("/maintenance_mode")
+    def set_maintenance_mode(body: MaintenanceModeBody):
+        app_state.set_maintenance_mode(body.maintenance_mode)
+        return {"maintenance_mode": app_state.get_maintenance_mode()}
 
-    @app.route("/vision_mode", methods=["POST"])
-    def set_vision_mode():
+    @app.post("/vision_mode")
+    def set_vision_mode(body: VisionModeBody):
         if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        app_state.set_vision_mode(data.get("vision_mode", ""))
-        return jsonify({"vision_mode": app_state.get_vision_mode()})
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        app_state.set_vision_mode(body.vision_mode)
+        return {"vision_mode": app_state.get_vision_mode()}
 
-    @app.route("/camera_rotation", methods=["POST"])
+    @app.post("/camera_rotation")
     def rotate_camera():
         if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.rotate_camera()
-        return jsonify({"camera_rotation": app_state.get_camera_rotation()})
+        return {"camera_rotation": app_state.get_camera_rotation()}
 
-    @app.route("/ocr_keyword")
+    @app.get("/ocr_keyword")
     def get_ocr_keyword():
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+        return {"ocr_keyword": app_state.get_ocr_keyword()}
 
-    @app.route("/ocr_keyword", methods=["POST"])
-    def set_ocr_keyword():
+    @app.post("/ocr_keyword")
+    def set_ocr_keyword(body: OcrKeywordBody):
         if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        new_keyword = data.get("ocr_keyword", "").strip()
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        new_keyword = body.ocr_keyword.strip()
         if not new_keyword:
-            return jsonify({"error": "ocr_keyword cannot be empty"}), 400
+            return JSONResponse(status_code=400, content={"error": "ocr_keyword cannot be empty"})
         app_state.set_ocr_keyword(new_keyword)
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+        return {"ocr_keyword": app_state.get_ocr_keyword()}
 
-    @app.route("/maintenance_password")
+    @app.get("/maintenance_password")
     def get_maintenance_password():
         password = os.environ.get("MAINTENANCE_PASSWORD", "")
-        return jsonify({"maintenance_password": password})
+        return {"maintenance_password": password}
 
-    @app.route("/load_classifier", methods=["POST"])
-    def load_classifier():
+    @app.post("/load_classifier")
+    def load_classifier(body: LoadClassifierBody):
         if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        model_path = str(data.get("model_path", "")).strip()
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        model_path = body.model_path.strip()
         resolved_path = _resolve_repo_path(model_path)
         if not model_path or not resolved_path.exists():
-            return jsonify({"error": "model_path does not exist"}), 400
+            return JSONResponse(status_code=400, content={"error": "model_path does not exist"})
         classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
-        return jsonify({"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)})
+        return {"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)}
 
-    @app.route("/classifier_status")
+    @app.get("/classifier_status")
     def get_classifier_status():
         status = app_state.get_classifier_status()
-        return jsonify({
+        return {
             "classifier_loaded": bool(status.get("loaded", False)),
             "model_path": status.get("model_path") or None,
-        })
+        }
 
-    @app.route("/video_feed")
+    @app.get("/video_feed")
     def video_feed():
-        return Response(
+        return StreamingResponse(
             generate_frames(),
-            mimetype="multipart/x-mixed-replace; boundary=frame",
+            media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
-    @app.route("/reset_counters", methods=["POST"])
+    @app.post("/reset_counters")
     def reset_counters():
         app_state.reset_counters()
-        return jsonify({"status": "counters reset"})
+        return {"status": "counters reset"}
 
-    @app.route("/dataset/capture", methods=["POST"])
-    def dataset_capture_route():
-        data = request.json or {}
-        label = str(data.get("label", "")).lower()
+    @app.post("/dataset/capture")
+    def dataset_capture_route(body: DatasetCaptureBody):
+        label = body.label.lower()
         if label not in ("ok", "defective"):
-            return jsonify({"success": False, "error": "label must be 'ok' or 'defective'"}), 400
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "label must be 'ok' or 'defective'"},
+            )
 
         frame = camera.get_frame()
         if frame is None:
-            return jsonify({"success": False, "error": "no frame available"}), 500
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "no frame available"},
+            )
 
         # apply the same rotation logic as DatasetCapture
         rotated = dataset_capture._apply_rotation(frame)
@@ -198,25 +235,25 @@ def create_app(camera, app_state):
         try:
             dataset_capture._save_frame(rotated, label)
         except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+            return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
 
-        return jsonify({
+        return {
             "success": True,
             "ok": dataset_capture.counters.get("ok", 0),
             "defective": dataset_capture.counters.get("defective", 0),
-        })
+        }
 
-    @app.route("/dataset/counts")
+    @app.get("/dataset/counts")
     def dataset_counts():
-        return jsonify(dataset_capture.counters)
+        return dataset_capture.counters
 
-    @app.route("/analytics")
+    @app.get("/analytics")
     def analytics():
         template_path = Path(__file__).resolve().parent / "templates" / "analytics.html"
-        return send_file(template_path)
+        return FileResponse(template_path)
 
-    @app.route("/analytics/data")
-    def analytics_data():
+    @app.get("/analytics/data")
+    def analytics_data(date_param: str = Query(default="", alias="date")):
         try:
             result_dir = cfg.get("output", {}).get("result_dir", "data/results")
             output_dir = Path(result_dir)
@@ -227,7 +264,7 @@ def create_app(camera, app_state):
             today = date.today()
             min_date = today - timedelta(days=6)  # 7 days including today
 
-            raw_date = request.args.get("date", "")
+            raw_date = date_param
             try:
                 requested_date = date.fromisoformat(raw_date) if raw_date else today
             except ValueError:
@@ -303,7 +340,7 @@ def create_app(camera, app_state):
                     "max": round(max(times), 2),
                 }
 
-            return jsonify({
+            return {
                 "date": requested_date.isoformat(),
                 "is_today": requested_date == today,
                 "is_min_date": requested_date <= min_date,
@@ -314,9 +351,9 @@ def create_app(camera, app_state):
                 "avg_processing_ms": avg_processing_ms,
                 "timeline": timeline,
                 "speed_timeline": speed_timeline,
-            })
+            }
 
         except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+            return JSONResponse(status_code=500, content={"error": str(exc)})
 
     return app
