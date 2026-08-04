@@ -93,22 +93,26 @@ def save_artifacts(output_dir: Path, model, processor) -> None:
     processor.save_pretrained(output_dir)
 
 
-def evaluate(model, data_loader, device) -> float:
+def evaluate(model, data_loader, device) -> tuple[float, float]:
     model.eval()
     correct = 0
     total = 0
+    running_loss = 0.0
 
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Validation", leave=False):
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["labels"].to(device)
 
-            outputs = model(pixel_values=pixel_values)
+            outputs = model(pixel_values=pixel_values, labels=labels)
             predictions = outputs.logits.argmax(dim=-1)
             correct += (predictions == labels).sum().item()
+            running_loss += outputs.loss.item() * labels.size(0)
             total += labels.size(0)
 
-    return (correct / total) * 100.0 if total else 0.0
+    accuracy = (correct / total) * 100.0 if total else 0.0
+    avg_loss = running_loss / total if total else float("inf")
+    return accuracy, avg_loss
 
 
 def train_one_epoch(model, data_loader, optimizer, device) -> float:
@@ -192,19 +196,31 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
     best_val_accuracy = -1.0
+    best_val_loss = float("inf")
     best_epoch = None
 
     for epoch in range(1, args.epochs + 1):
         train_loss = train_one_epoch(model, train_loader, optimizer, device)
-        val_accuracy = evaluate(model, val_loader, device)
+        val_accuracy, val_loss = evaluate(model, val_loader, device)
 
-        print(f"Epoch {epoch}/{args.epochs} — loss: {train_loss:.4f} — val_accuracy: {val_accuracy:.2f}%")
+        print(
+            f"Epoch {epoch}/{args.epochs} — train_loss: {train_loss:.4f} — "
+            f"val_loss: {val_loss:.4f} — val_accuracy: {val_accuracy:.2f}%"
+        )
 
         checkpoint_dir = output_dir / f"epoch-{epoch}"
         save_artifacts(checkpoint_dir, model, processor)
 
-        if val_accuracy > best_val_accuracy:
+        # val_accuracy is leidend; bij een gelijkspel (bv. altijd 100% op een
+        # kleine/simpele validatieset) wint de laagste val_loss. We kijken
+        # bewust niet naar train_loss: die daalt vooral doordat het model de
+        # trainingsset uit het hoofd leert, en zegt niets over generalisatie.
+        is_better = val_accuracy > best_val_accuracy or (
+            val_accuracy == best_val_accuracy and val_loss < best_val_loss
+        )
+        if is_better:
             best_val_accuracy = val_accuracy
+            best_val_loss = val_loss
             best_epoch = epoch
 
     final_dir = output_dir / "final"
@@ -215,7 +231,10 @@ def main():
         shutil.rmtree(final_dir)
     shutil.copytree(best_checkpoint_dir, final_dir)
 
-    print(f"Training complete. Best epoch: {best_epoch}/{args.epochs} (val_accuracy: {best_val_accuracy:.2f}%)")
+    print(
+        f"Training complete. Best epoch: {best_epoch}/{args.epochs} "
+        f"(val_accuracy: {best_val_accuracy:.2f}%, val_loss: {best_val_loss:.4f})"
+    )
     print(f"Model saved to models/classifier/final/ (copy of epoch-{best_epoch})")
     print("To use this model, set classifier_model_path in config/default.yaml")
 
