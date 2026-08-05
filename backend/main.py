@@ -1,8 +1,8 @@
 """
 Main Entry Point
 
-This module orchestrates the entire vision application, including camera 
-management, vision processing, the TCP trigger server for PLC integration, 
+This module orchestrates the entire vision application, including camera
+management, vision processing, the TCP trigger server for PLC integration,
 and the web interface.
 """
 
@@ -16,7 +16,7 @@ from frontend.web import create_app
 from backend.core.state import AppState
 import time
 from backend.core.config_loader import cfg
-from backend.utils.logger import setup_logging, get_logger
+from backend.utils.logger import setup_logging, get_logger, UVICORN_LOG_CONFIG
 from backend.output.result_writer import save_result
 
 log = get_logger(__name__)
@@ -120,11 +120,17 @@ def main():
         app = create_app(camera, app_state)
         web_thread = threading.Thread(
             target=lambda: uvicorn.run(
-                app, host=web_cfg["host"], port=web_cfg["port"], log_level="warning"
+                app,
+                host=web_cfg["host"],
+                port=web_cfg["port"],
+                log_config=UVICORN_LOG_CONFIG,
             ),
             daemon=True,
         )
         web_thread.start()
+
+        display_host = "127.0.0.1" if web_cfg["host"] in ("0.0.0.0", "127.0.0.1", "localhost") else web_cfg["host"]
+        log.info("Web dashboard: http://%s:%s", display_host, web_cfg["port"])
 
         trigger_server = TCPTriggerServer(
             camera=camera,
