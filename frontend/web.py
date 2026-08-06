@@ -1,13 +1,17 @@
+import csv
+import io
 import json
 import os
 from datetime import date, datetime, timedelta
 import cv2
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
 from pydantic import BaseModel
 from pathlib import Path
+from backend.core import db
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
 from tools.capture_dataset import DatasetCapture
@@ -20,6 +24,35 @@ def _resolve_repo_path(path: str) -> Path:
         resolved = Path(__file__).resolve().parents[1] / resolved
     return resolved.resolve()
 
+
+# Columns that always appear first, in this order, in an export.qqq
+_CORE_EXPORT_COLUMNS = [
+    "timestamp", "status", "mode", "confidence_threshold",
+    "processing_time_ms", "cycle_time_ms", "error",
+]
+
+
+def _build_export_table(results: list) -> tuple:
+    extra_columns = set()
+    for r in results:
+        extra_columns.update(k for k in r.keys() if k not in _CORE_EXPORT_COLUMNS)
+    headers = _CORE_EXPORT_COLUMNS + sorted(extra_columns)
+
+    rows = []
+    for r in results:
+        row = []
+        for col in headers:
+            value = r.get(col)
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False)
+            row.append(value)
+        rows.append(row)
+    return headers, rows
+
+
+# --- Request bodies -------------------------------------------------------
+# Pydantic models replace Flask's `request.json or {}` pattern. Defaults
+# mirror the old `data.get(key, default)` calls exactly.
 
 class ThresholdBody(BaseModel):
     threshold: float = 0.5
@@ -47,6 +80,8 @@ class DatasetCaptureBody(BaseModel):
 
 def create_app(camera, app_state) -> FastAPI:
     app = FastAPI()
+
+    db.init_db()
 
     # flask-cors' CORS(app) defaults to allowing all origins/methods/headers
     # without credentials; this mirrors that.
@@ -255,11 +290,6 @@ def create_app(camera, app_state) -> FastAPI:
     @app.get("/analytics/data")
     def analytics_data(date_param: str = Query(default="", alias="date")):
         try:
-            result_dir = cfg.get("output", {}).get("result_dir", "data/results")
-            output_dir = Path(result_dir)
-            if not output_dir.is_absolute():
-                output_dir = Path(__file__).resolve().parents[1] / output_dir
-
             # Parse requested date, default to today, clamp to 7-day window
             today = date.today()
             min_date = today - timedelta(days=6)  # 7 days including today
@@ -276,18 +306,7 @@ def create_app(camera, app_state) -> FastAPI:
             if requested_date < min_date:
                 requested_date = min_date
 
-            daily_file = output_dir / f"{requested_date.isoformat()}.jsonl"
-
-            results = []
-            if daily_file.exists():
-                with daily_file.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            try:
-                                results.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
+            results = db.query_summary(requested_date, requested_date)
 
             total = len(results)
             ok_count = sum(1 for r in results if r.get("status") == "OK")
@@ -304,33 +323,26 @@ def create_app(camera, app_state) -> FastAPI:
             # Build timeline: group results by hour (0-23), count OK and NOK per hour
             timeline = {str(h): {"ok": 0, "nok": 0} for h in range(24)}
             for r in results:
-                ts = r.get("timestamp", "")
-                try:
-                    hour = str(datetime.fromisoformat(ts).hour)
-                    if r.get("status") == "OK":
-                        timeline[hour]["ok"] += 1
-                    else:
-                        timeline[hour]["nok"] += 1
-                except Exception:
+                ts = r.get("timestamp")
+                if not isinstance(ts, datetime):
                     continue
+                hour = str(ts.hour)
+                if r.get("status") == "OK":
+                    timeline[hour]["ok"] += 1
+                else:
+                    timeline[hour]["nok"] += 1
 
             # Builds speed timeline in 15-minute buckets
             # Key format: "HH:MM" for each 15-min slot (00:00, 00:15, 00:30, 00:45, 01:00 ...)
             speed_buckets = {}
             for r in results:
-                ts = r.get("timestamp", "")
+                ts = r.get("timestamp")
                 pt = r.get("processing_time_ms")
-                if not isinstance(pt, (int, float)):
+                if not isinstance(pt, (int, float)) or not isinstance(ts, datetime):
                     continue
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    minute_slot = (dt.minute // 15) * 15
-                    key = f"{dt.hour:02d}:{minute_slot:02d}"
-                    if key not in speed_buckets:
-                        speed_buckets[key] = []
-                    speed_buckets[key].append(float(pt))
-                except Exception:
-                    continue
+                minute_slot = (ts.minute // 15) * 15
+                key = f"{ts.hour:02d}:{minute_slot:02d}"
+                speed_buckets.setdefault(key, []).append(float(pt))
 
             speed_timeline = {}
             for key, times in speed_buckets.items():
@@ -352,6 +364,65 @@ def create_app(camera, app_state) -> FastAPI:
                 "timeline": timeline,
                 "speed_timeline": speed_timeline,
             }
+
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    @app.get("/analytics/export")
+    def analytics_export(
+        start: str = Query(default=""),
+        end: str = Query(default=""),
+        export_format: str = Query(default="csv", alias="format"),
+    ):
+        try:
+            try:
+                start_date = date.fromisoformat(start)
+                end_date = date.fromisoformat(end)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "start and end must be dates in YYYY-MM-DD format"},
+                )
+
+            if start_date > end_date:
+                start_date, end_date = end_date, start_date
+
+            if export_format not in ("csv", "xlsx"):
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "format must be 'csv' or 'xlsx'"},
+                )
+
+            results = db.query_full(start_date, end_date)
+            headers, rows = _build_export_table(results)
+            filename_base = f"inspections_{start_date.isoformat()}_to_{end_date.isoformat()}"
+
+            if export_format == "csv":
+                buffer = io.StringIO()
+                writer = csv.writer(buffer)
+                writer.writerow(headers)
+                writer.writerows(rows)
+                # utf-8-sig so Excel recognizes the encoding instead of mangling accented characters
+                csv_bytes = buffer.getvalue().encode("utf-8-sig")
+                return Response(
+                    content=csv_bytes,
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+                )
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Inspections"
+            sheet.append(headers)
+            for row in rows:
+                sheet.append(row)
+            xlsx_buffer = io.BytesIO()
+            workbook.save(xlsx_buffer)
+            return Response(
+                content=xlsx_buffer.getvalue(),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+            )
 
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc)})
