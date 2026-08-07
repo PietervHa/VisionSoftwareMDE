@@ -1,4 +1,4 @@
-        // Date navigation — start on today
+// Date navigation — start on today
         const _today = new Date();
         _today.setHours(0, 0, 0, 0);
         let currentDate = new Date(_today);
@@ -508,6 +508,46 @@
             } catch (err) {
                 showRefreshError();
             }
+        }
+
+        // --- Export panel ---
+        const exportStartInput = document.getElementById("export-start");
+        const exportEndInput = document.getElementById("export-end");
+        const exportError = document.getElementById("exportError");
+        const btnExportCsv = document.getElementById("btn-export-csv");
+        const btnExportXlsx = document.getElementById("btn-export-xlsx");
+
+        function showExportError(message) {
+            if (!exportError) return;
+            exportError.textContent = message;
+            exportError.style.visibility = "visible";
+            setTimeout(() => { exportError.style.visibility = "hidden"; }, 4000);
+        }
+
+        // Default both date fields to the day currently shown on the dashboard
+        if (exportStartInput) exportStartInput.value = formatISODate(currentDate);
+        if (exportEndInput) exportEndInput.value = formatISODate(currentDate);
+
+        function triggerExport(format) {
+            const start = exportStartInput ? exportStartInput.value : "";
+            const end = exportEndInput ? exportEndInput.value : "";
+
+            if (!start || !end) {
+                showExportError("Pick both a start and end date first.");
+                return;
+            }
+
+            const url = `/analytics/export?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&format=${format}`;
+            // Native browser download via Content-Disposition: attachment,
+            // no need for a fetch+blob round trip.
+            window.location.href = url;
+        }
+
+        if (btnExportCsv) {
+            btnExportCsv.addEventListener("click", () => triggerExport("csv"));
+        }
+        if (btnExportXlsx) {
+            btnExportXlsx.addEventListener("click", () => triggerExport("xlsx"));
         }
 
         fetchData();
