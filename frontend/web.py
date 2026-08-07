@@ -1,4 +1,5 @@
 import csv
+import hmac
 import io
 import json
 import os
@@ -25,7 +26,7 @@ def _resolve_repo_path(path: str) -> Path:
     return resolved.resolve()
 
 
-# Columns that always appear first, in this order, in an export.qqq
+# Columns that always appear first, in this order, in an export.
 _CORE_EXPORT_COLUMNS = [
     "timestamp", "status", "mode", "confidence_threshold",
     "processing_time_ms", "cycle_time_ms", "error",
@@ -60,6 +61,7 @@ class ThresholdBody(BaseModel):
 
 class MaintenanceModeBody(BaseModel):
     maintenance_mode: bool = False
+    password: str = ""
 
 
 class VisionModeBody(BaseModel):
@@ -181,6 +183,15 @@ def create_app(camera, app_state) -> FastAPI:
 
     @app.post("/maintenance_mode")
     def set_maintenance_mode(body: MaintenanceModeBody):
+        # Entering maintenance mode requires the correct password, checked
+        # server-side. Leaving maintenance mode (back to production) never
+        # needs one — that's always the safe direction.
+        entering_maintenance = body.maintenance_mode and not app_state.get_maintenance_mode()
+        if entering_maintenance:
+            expected_password = os.environ.get("MAINTENANCE_PASSWORD", "")
+            if not expected_password or not hmac.compare_digest(body.password, expected_password):
+                return JSONResponse(status_code=403, content={"error": "Incorrect password"})
+
         app_state.set_maintenance_mode(body.maintenance_mode)
         return {"maintenance_mode": app_state.get_maintenance_mode()}
 
@@ -211,11 +222,6 @@ def create_app(camera, app_state) -> FastAPI:
             return JSONResponse(status_code=400, content={"error": "ocr_keyword cannot be empty"})
         app_state.set_ocr_keyword(new_keyword)
         return {"ocr_keyword": app_state.get_ocr_keyword()}
-
-    @app.get("/maintenance_password")
-    def get_maintenance_password():
-        password = os.environ.get("MAINTENANCE_PASSWORD", "")
-        return {"maintenance_password": password}
 
     @app.post("/load_classifier")
     def load_classifier(body: LoadClassifierBody):

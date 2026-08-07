@@ -3,7 +3,6 @@ let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
 let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
-let PASSWORD = null; // Loaded from backend
 let LAST_DATASET_COUNTS_FETCH = 0;
 const DATASET_COUNTS_POLL_MS = 5000;
 let DATASET_CAPTURE_ACTIVE = false;
@@ -140,16 +139,6 @@ async function loadOcrKeyword() {
     const res = await fetch("/ocr_keyword");
     const data = await res.json();
     document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
-}
-
-async function loadMaintenancePassword() {
-    try {
-        const res = await fetch("/maintenance_password");
-        const data = await res.json();
-        PASSWORD = data.maintenance_password || "";
-    } catch (e) {
-        console.error("Failed to load maintenance password:", e);
-    }
 }
 
 function updateDatasetCaptureUI() {
@@ -393,14 +382,30 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
     applyMode();
 });
 
-document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
-    // Prompt for password without auto-filling it
+document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
     const userPass = prompt("Enter password to enter maintenance mode:");
-    if (userPass !== PASSWORD) {
-        alert("Incorrect password. Access denied.");
+    if (userPass === null) return; // prompt cancelled
+
+    // The password is checked server-side; the client never sees the real value.
+    try {
+        const res = await fetch("/maintenance_mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maintenance_mode: true, password: userPass })
+        });
+
+        if (!res.ok) {
+            alert("Incorrect password. Access denied.");
+            return;
+        }
+    } catch (e) {
+        console.error("Failed to enter maintenance mode:", e);
+        alert("Could not reach the server. Please try again.");
         return;
     }
 
+    // Already synced above — mark it so applyMode() doesn't POST again.
+    LAST_SYNCED_MODE = "maintenance";
     CURRENT_MODE = "maintenance";
     applyMode();
 });
@@ -448,7 +453,7 @@ document.getElementById("captureToggleBtn").addEventListener("click", () => {
 /* Keyboard shortcuts for dataset capture */
 document.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
-    
+
     if (key === "1" && DATASET_CAPTURE_ACTIVE) {
         e.preventDefault();
         captureDatasetImage("ok");
@@ -470,7 +475,6 @@ async function init() {
         await loadStatus();
         await loadThreshold();
         await loadOcrKeyword();
-        await loadMaintenancePassword();
         applyMode();
 
         startResultPolling();
