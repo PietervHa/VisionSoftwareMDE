@@ -53,74 +53,79 @@
         let nokOnlyChart = null; // line chart instance for NOK only
         let speedChart = null; // line chart instance for processing speed
 
-        const chart = new Chart(document.getElementById("hourlyChart"), {
-            type: "bar",
-            data: {
-                labels: hourLabels,
-                datasets: [
-                    {
-                        label: "OK",
-                        data: okData,
-                        backgroundColor: "#1e7f34",
-                    },
-                    {
-                        label: "NOK",
-                        data: nokData,
-                        backgroundColor: "#9b1c1c",
-                    },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        labels: {
+        let chart = null;
+        try {
+            chart = new Chart(document.getElementById("hourlyChart"), {
+                type: "bar",
+                data: {
+                    labels: hourLabels,
+                    datasets: [
+                        {
+                            label: "OK",
+                            data: okData,
+                            backgroundColor: "#1e7f34",
+                        },
+                        {
+                            label: "NOK",
+                            data: nokData,
+                            backgroundColor: "#9b1c1c",
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: "#eee",
+                            },
+                        },
+                        title: {
+                            display: true,
+                            text: "Inspections per Hour",
                             color: "#eee",
+                            font: {
+                                size: 18,
+                            },
                         },
                     },
-                    title: {
-                        display: true,
-                        text: "Inspections per Hour",
-                        color: "#eee",
-                        font: {
-                            size: 18,
+                    scales: {
+                        x: {
+                            stacked: false,
+                            ticks: {
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "Hour",
+                                color: "#aaa",
+                            },
                         },
-                    },
-                },
-                scales: {
-                    x: {
-                        stacked: false,
-                        ticks: {
-                            color: "#aaa",
-                        },
-                        grid: {
-                            color: "rgba(255,255,255,0.08)",
-                        },
-                        title: {
-                            display: true,
-                            text: "Hour",
-                            color: "#aaa",
-                        },
-                    },
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            precision: 0,
-                            color: "#aaa",
-                        },
-                        grid: {
-                            color: "rgba(255,255,255,0.08)",
-                        },
-                        title: {
-                            display: true,
-                            text: "Count",
-                            color: "#aaa",
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0,
+                                color: "#aaa",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "Count",
+                                color: "#aaa",
+                            },
                         },
                     },
                 },
-            },
-        });
+            });
+        } catch (err) {
+            console.error("Chart.js kon niet initialiseren (bv. CDN niet bereikbaar); grafieken werken niet, rest van de pagina wel.", err);
+        }
 
         function formatTime(dateObj) {
             return dateObj.toLocaleTimeString([], { hour12: false });
@@ -538,6 +543,7 @@
             }
 
             const url = `/analytics/export?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&format=${format}`;
+
             // Native browser download via Content-Disposition: attachment,
             // no need for a fetch+blob round trip.
             window.location.href = url;
