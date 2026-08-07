@@ -183,11 +183,8 @@ def create_app(camera, app_state) -> FastAPI:
 
     @app.post("/maintenance_mode")
     def set_maintenance_mode(body: MaintenanceModeBody):
-        # Entering maintenance mode requires the correct password, checked
-        # server-side. Leaving maintenance mode (back to production) never
-        # needs one — that's always the safe direction.
-        entering_maintenance = body.maintenance_mode and not app_state.get_maintenance_mode()
-        if entering_maintenance:
+        # Entering maintenance mode always requires the correct password.
+        if body.maintenance_mode:
             expected_password = os.environ.get("MAINTENANCE_PASSWORD", "")
             if not expected_password or not hmac.compare_digest(body.password, expected_password):
                 return JSONResponse(status_code=403, content={"error": "Incorrect password"})

@@ -1,7 +1,6 @@
-﻿let CURRENT_MODE = "maintenance";
+let CURRENT_MODE = "production";
 let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
-let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
 let LAST_DATASET_COUNTS_FETCH = 0;
 const DATASET_COUNTS_POLL_MS = 5000;
@@ -106,8 +105,6 @@ async function loadStatus() {
     const res = await fetch("/status");
     const data = await res.json();
     VISION_MODE = data.vision_mode;
-    CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
-    LAST_SYNCED_MODE = CURRENT_MODE;
     updateVisionModeButtons();
 }
 
@@ -260,7 +257,6 @@ function applyMode() {
     const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
     const rotateBtn = document.getElementById("rotateCameraBtn");
-    const previousMode = LAST_APPLIED_MODE;
 
     if (rotateBtn) {
         rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
@@ -323,27 +319,6 @@ function applyMode() {
     }
 
     updateDatasetCaptureUI();
-
-    if (previousMode !== null && previousMode !== CURRENT_MODE) {
-        syncModeToBackend();
-    }
-}
-
-async function syncModeToBackend() {
-    if (LAST_SYNCED_MODE === CURRENT_MODE) return;
-
-    LAST_SYNCED_MODE = CURRENT_MODE;
-
-    try {
-        await fetch("/maintenance_mode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ maintenance_mode: CURRENT_MODE === "maintenance" })
-        });
-    } catch (e) {
-        LAST_SYNCED_MODE = null;
-        console.error("Failed to sync maintenance mode:", e);
-    }
 }
 
 async function applyVisionMode(mode) {
@@ -378,8 +353,22 @@ async function applyVisionMode(mode) {
 document.getElementById("startProductionBtn").addEventListener("click", () => {
     if (!confirm("Start production mode?\n\nConfidence threshold will be locked.")) return;
 
-    CURRENT_MODE = "production";
-    applyMode();
+    fetch("/maintenance_mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maintenance_mode: false })
+    }).then((res) => {
+        if (!res.ok) {
+            alert("Could not switch to production mode.");
+            return;
+        }
+
+        CURRENT_MODE = "production";
+        applyMode();
+    }).catch((e) => {
+        console.error("Failed to switch to production mode:", e);
+        alert("Could not reach the server. Please try again.");
+    });
 });
 
 document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
@@ -404,8 +393,6 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", async (
         return;
     }
 
-    // Already synced above — mark it so applyMode() doesn't POST again.
-    LAST_SYNCED_MODE = "maintenance";
     CURRENT_MODE = "maintenance";
     applyMode();
 });
@@ -482,5 +469,11 @@ async function init() {
         console.error("Initialization failed:", e);
     }
 }
+
+window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+        window.location.reload();
+    }
+});
 
 init();

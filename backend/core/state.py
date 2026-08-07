@@ -27,7 +27,7 @@ class AppState:
             "total": 0,
         }
         self.confidence_threshold = 0.0
-        self.maintenance_mode = True
+        self.maintenance_mode = False
         self.camera_rotation = 0  # steps: 0, 1, 2, 3 (each = 90° clockwise)
         self.vision_mode = cfg["vision_mode"]
         self.ocr_keyword = cfg["ocr"]["keywords"][0] if cfg["ocr"]["keywords"] else ""
@@ -189,4 +189,3 @@ class AppState:
 
         self.set_classifier_loaded(model_path if loaded else "")
         return loaded
-
