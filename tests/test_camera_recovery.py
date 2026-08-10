@@ -2,18 +2,17 @@
 Standalone smoke test for the Camera recovery logic in camera.py.
 
 Stubs out cv2 and the backend.* imports so the module can be exercised
-without OpenCV or the real project, then simulates a camera being
-unplugged and replugged to verify:
-  1. Disconnects are detected quickly (FAILURE_THRESHOLD reads).
-  2. The feed recovers automatically once the device is "replugged".
-  3. is_connected() accurately reflects state throughout.
-  4. reconnect() forces an immediate retry.
+without OpenCV or the real project. Includes a FakeVideoCapture that can
+either fail fast OR *block* inside read() while the device is "unplugged"
+(reproducing the DirectShow-on-Windows hang), to prove recovery works in
+both cases.
 
 Run with: python3 test_camera_recovery.py
 """
 import sys
 import types
 import time
+import threading
 import unittest
 from unittest.mock import MagicMock
 
@@ -27,6 +26,18 @@ class FakeDevice:
     def __init__(self):
         self.present = True
         self.frame_counter = 0
+        self.present_event = threading.Event()
+        self.present_event.set()
+        # If True, read() blocks (like a hung DirectShow call) while the
+        # device is absent, instead of returning (False, None).
+        self.hang_on_disconnect = False
+
+    def set_present(self, value):
+        self.present = value
+        if value:
+            self.present_event.set()
+        else:
+            self.present_event.clear()
 
 
 DEVICE = FakeDevice()
@@ -36,9 +47,8 @@ class FakeVideoCapture:
     def __init__(self, index, backend):
         self.index = index
         self.backend = backend
-        # isOpened() reflects device presence *at construction time*,
-        # matching real cv2 behaviour (opening while unplugged fails).
         self._opened = DEVICE.present
+        self._released = False
 
     def set(self, prop, value):
         return True
@@ -50,12 +60,29 @@ class FakeVideoCapture:
         return self._opened
 
     def read(self):
-        if not DEVICE.present or not self._opened:
+        if self._released:
             return False, None
+
+        if not DEVICE.present:
+            if DEVICE.hang_on_disconnect:
+                # Simulate a DirectShow-style hang: block until the device
+                # comes back (or this capture is released out from under us).
+                while not DEVICE.present_event.wait(timeout=0.05):
+                    if self._released:
+                        return False, None
+                if self._released:
+                    return False, None
+            else:
+                return False, None
+
+        if not self._opened:
+            return False, None
+
         DEVICE.frame_counter += 1
         return True, {"frame_id": DEVICE.frame_counter}
 
     def release(self):
+        self._released = True
         self._opened = False
 
 
@@ -108,7 +135,9 @@ def wait_until(predicate, timeout=3.0, interval=0.02):
 class CameraRecoveryTests(unittest.TestCase):
     def setUp(self):
         DEVICE.present = True
+        DEVICE.present_event.set()
         DEVICE.frame_counter = 0
+        DEVICE.hang_on_disconnect = False
         self.cam = camera_module.Camera(app_state=None)
         self.assertTrue(
             wait_until(lambda: self.cam.get_frame() is not None),
@@ -122,47 +151,68 @@ class CameraRecoveryTests(unittest.TestCase):
         self.assertTrue(self.cam.is_connected())
         self.assertIsNotNone(self.cam.get_frame())
 
-    def test_detects_unplug_quickly(self):
-        DEVICE.present = False
-        detected = wait_until(lambda: not self.cam.is_connected(), timeout=1.0)
-        self.assertTrue(detected, "disconnect was not detected in time")
+    def test_recovers_from_fast_failing_disconnect(self):
+        DEVICE.hang_on_disconnect = False
+        DEVICE.set_present(False)
+        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=2.0))
 
-    def test_recovers_after_replug(self):
-        DEVICE.present = False
-        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=1.0))
-
-        last_frame_before = self.cam.get_frame()
-
-        # Simulate the user plugging the camera back in.
-        DEVICE.present = True
-
-        recovered = wait_until(lambda: self.cam.is_connected(), timeout=3.0)
-        self.assertTrue(recovered, "camera did not recover after replug")
-
-        # New frames should resume flowing.
-        got_new_frame = wait_until(
-            lambda: self.cam.get_frame() != last_frame_before, timeout=1.0
+        DEVICE.set_present(True)
+        self.assertTrue(
+            wait_until(lambda: self.cam.is_connected(), timeout=3.0),
+            "camera did not recover after replug (fast-fail read)",
         )
-        self.assertTrue(got_new_frame, "live feed did not resume after recovery")
+
+    def test_recovers_from_hanging_read(self):
+        """
+        Reproduces the real-world symptom: read() blocks instead of
+        returning False once the device disappears. This is the case the
+        old single-thread implementation could NOT recover from, since it
+        never got control back from the blocked read() call.
+        """
+        DEVICE.hang_on_disconnect = True
+        DEVICE.set_present(False)
+
+        # The old worker is now stuck inside read(). The supervisor must
+        # notice via staleness (not via a returned failure) and mark us
+        # disconnected within roughly STALE_TIMEOUT.
+        self.assertTrue(
+            wait_until(lambda: not self.cam.is_connected(), timeout=2.5),
+            "supervisor never detected the stalled/hanging camera",
+        )
+
+        # Device comes back while the old worker may still be blocked;
+        # a freshly spawned worker (via the supervisor's reconnect
+        # attempts) should pick up frames again.
+        DEVICE.set_present(True)
+        self.assertTrue(
+            wait_until(lambda: self.cam.is_connected(), timeout=4.0),
+            "camera did not recover after replug (hanging read)",
+        )
+
+        last_frame = self.cam.get_frame()
+        self.assertTrue(
+            wait_until(lambda: self.cam.get_frame() != last_frame, timeout=1.0),
+            "live feed did not resume producing new frames after recovery",
+        )
 
     def test_manual_reconnect_forces_immediate_retry(self):
-        DEVICE.present = False
-        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=1.0))
+        DEVICE.hang_on_disconnect = True
+        DEVICE.set_present(False)
+        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=2.5))
 
-        # Camera comes back, but we don't want to wait for the backoff
-        # timer - simulate pressing a "retry" button in the UI.
-        DEVICE.present = True
+        DEVICE.set_present(True)
         self.cam.reconnect()
 
-        recovered = wait_until(lambda: self.cam.is_connected(), timeout=0.5)
-        self.assertTrue(recovered, "manual reconnect() did not recover promptly")
+        self.assertTrue(
+            wait_until(lambda: self.cam.is_connected(), timeout=1.5),
+            "manual reconnect() did not recover promptly",
+        )
 
     def test_stays_down_while_unplugged_no_crash(self):
-        DEVICE.present = False
-        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=1.0))
-        # Let several backoff cycles pass; thread must survive and keep
-        # reporting disconnected rather than raising/dying.
-        time.sleep(1.0)
+        DEVICE.hang_on_disconnect = True
+        DEVICE.set_present(False)
+        self.assertTrue(wait_until(lambda: not self.cam.is_connected(), timeout=2.5))
+        time.sleep(1.5)  # let a few backoff cycles pass
         self.assertFalse(self.cam.is_connected())
 
 

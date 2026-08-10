@@ -6,18 +6,37 @@ rotations and flipping based on configuration and application state.
 
 Recovery behaviour
 -------------------
-The background update thread continuously monitors read health. When frame
-reads start failing (e.g. the camera is unplugged), it detects this quickly
-(FAILURE_THRESHOLD consecutive failures) and starts attempting to reopen the
-capture device. Reopen attempts use a short exponential backoff so that:
-  - a camera that comes back quickly (replugged) is picked up almost
-    instantly (first retry after RECONNECT_MIN_INTERVAL seconds), and
-  - a camera that stays absent for a while doesn't cause the thread to
-    hammer the OS/driver with repeated open attempts (retry interval is
-    capped at RECONNECT_MAX_INTERVAL seconds).
-A manual reconnect() can also be requested from any thread (e.g. a "retry"
-button in the UI); it's honored on the capture thread itself so there's no
-cross-thread access to the underlying cv2.VideoCapture object.
+cv2.VideoCapture.read() is *not* guaranteed to fail fast when the device
+disappears mid-capture. In particular the DirectShow backend on Windows
+(cv2.CAP_DSHOW) is known to block indefinitely inside read() once the USB
+device is unplugged, rather than returning (False, None). A recovery
+strategy that only reacts *after* read() returns therefore never runs in
+that case - the thread is simply stuck.
+
+To make recovery work regardless of whether read() fails fast or hangs,
+capture is split into two parts:
+
+  - _CaptureWorker: a small dedicated thread that does nothing but call
+    cap.read() in a loop and publish the latest successful frame + the
+    time it arrived. If its read() call hangs, this thread simply sits
+    there - it is never joined or waited on.
+
+  - Camera._update (the supervisor): watches how long it has been since
+    the *current* worker last published a fresh frame. If that exceeds
+    STALE_TIMEOUT, the camera is considered stalled/disconnected. The
+    supervisor then opens a brand new VideoCapture and spins up a brand
+    new worker for it, and simply abandons the old (possibly still
+    blocked) worker as a daemon thread - it is never relied upon again.
+    Reconnect attempts use a short exponential backoff so a camera that
+    comes back quickly is picked up almost instantly, while a camera
+    that stays absent doesn't get hammered with open attempts.
+
+Trade-off: because a thread blocked inside a C-level call can't be forced
+to stop from Python, an abandoned worker may leak until its read() call
+eventually returns or the process exits. worker.stop() does a best-effort
+cap.release() to try to unblock it, which works on most platforms/backends
+but isn't guaranteed. This is still far better than the whole app being
+unable to recover at all.
 """
 
 import cv2
@@ -30,10 +49,12 @@ from backend.utils.logger import get_logger
 log = get_logger(__name__)
 TARGET = 1 / 30  # Target time per frame for ~30 FPS
 
-# Consecutive failed reads before the update thread treats the camera as
-# down and starts attempting to reopen it. Kept small so recovery reacts
-# quickly, while still ignoring a single transient dropped frame.
-FAILURE_THRESHOLD = 5  # ~0.15s at target FPS
+# How long we tolerate zero fresh frames before treating the camera as
+# stalled/disconnected. Set comfortably above the sub-second read hiccups
+# seen in practice (single slow frame, self-recovers) so those don't
+# trigger needless reconnects, while still reacting quickly to a real
+# disconnect.
+STALE_TIMEOUT = 1.5
 
 # Backoff bounds (in seconds) between reopen attempts while the camera is
 # down. Starts fast so a quick replug is picked up almost immediately, and
@@ -41,6 +62,64 @@ FAILURE_THRESHOLD = 5  # ~0.15s at target FPS
 # open attempts.
 RECONNECT_MIN_INTERVAL = 0.25
 RECONNECT_MAX_INTERVAL = 2.0
+
+
+class _CaptureWorker(threading.Thread):
+    """
+    Owns exactly one cv2.VideoCapture instance and does nothing but read
+    from it in a loop, publishing (frame, timestamp) to whoever asks via
+    latest(). Deliberately dumb: it has no opinion about reconnecting - if
+    its read() call hangs (device disappeared mid-capture), this thread
+    just sits there. The supervisor is the one that decides when to stop
+    trusting a worker and start a fresh one.
+    """
+    def __init__(self, cap):
+        super().__init__(daemon=True)
+        self.cap = cap
+        self._stop_requested = False
+        self._lock = threading.Lock()
+        self._frame = None
+        self._timestamp = 0.0
+
+    def run(self):
+        while not self._stop_requested:
+            t0 = time.perf_counter()
+            try:
+                ret, frame = self.cap.read()
+            except Exception as exc:
+                log.error("Camera read raised an exception: %s", exc, exc_info=True)
+                ret, frame = False, None
+
+            if ret and frame is not None:
+                with self._lock:
+                    self._frame = frame
+                    self._timestamp = time.monotonic()
+
+            # If read() blocked (e.g. device gone), this sleep is simply
+            # never reached until it unblocks - that's fine, the
+            # supervisor isn't waiting on this thread.
+            elapsed = time.perf_counter() - t0
+            remaining = TARGET - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+    def latest(self):
+        """Thread-safe read of the most recent successful (frame, timestamp)."""
+        with self._lock:
+            return self._frame, self._timestamp
+
+    def stop(self):
+        """
+        Best-effort shutdown. If this worker's read() call is currently
+        blocked, releasing the capture from another thread will often (but
+        not always, depending on backend/OS) cause it to unblock with an
+        error. Either way, we don't wait for it.
+        """
+        self._stop_requested = True
+        try:
+            self.cap.release()
+        except Exception as exc:
+            log.warning("Error releasing superseded camera handle: %s", exc)
 
 
 class Camera:
@@ -57,43 +136,34 @@ class Camera:
         # Connection health, readable from any thread (plain bool reads/
         # writes are atomic under the GIL, so no extra lock is needed here).
         self.connected = False
-        # Set from any thread to request an immediate reconnect attempt on
-        # the capture thread, bypassing the current backoff wait.
+        # Set from any thread to request an immediate reconnect attempt.
         self._force_reconnect = threading.Event()
+        # Guards against stacking multiple concurrent reconnect attempts.
+        self._spawning = threading.Event()
 
-        self.cap = None
-        self._open_capture()
+        self.cap = self._open_new_capture()
+        self._worker = _CaptureWorker(self.cap)
+        self._worker.start()
 
         t = threading.Thread(target=self._update, daemon=True)
         t.start()
 
-    def _open_capture(self):
+    def _open_new_capture(self):
         """
-        Opens (or reopens) the underlying VideoCapture device using the
-        configured index/resolution. Shared by __init__ and the automatic
-        reconnect logic in _update() so there is one place that knows how
-        to stand the camera back up. Updates self.connected to reflect the
-        outcome.
+        Opens a brand new VideoCapture using the configured index/resolution.
+        Does not touch any existing capture/worker - callers own that.
         """
         cam_cfg = cfg["camera"]
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
 
-        if self.cap is not None:
-            try:
-                self.cap.release()
-            except Exception as exc:
-                log.warning("Error releasing camera before reopen: %s", exc)
+        cap = cv2.VideoCapture(cam_cfg["index"], backend)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
 
-        self.cap = cv2.VideoCapture(cam_cfg["index"], backend)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
-
-        self.connected = bool(self.cap.isOpened())
-
-        if self.connected:
-            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if cap.isOpened():
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             log.info(
                 "Camera opened successfully: index=%s resolution=%sx%s",
                 cam_cfg["index"],
@@ -103,99 +173,95 @@ class Camera:
         else:
             log.error("Camera failed to open: index=%s", cam_cfg["index"])
 
-        return self.connected
+        return cap
 
-    def _attempt_reconnect(self, failures_so_far):
+    def _start_new_worker(self):
         """
-        Wraps _open_capture() for use from the recovery paths below, so
-        exceptions during a reopen attempt (e.g. driver hiccup) can never
-        kill the update thread.
+        Kicks off opening a fresh capture + worker on a disposable helper
+        thread, so that even a hanging VideoCapture *constructor* can never
+        block the supervisor loop. Skips if a spawn is already in flight.
         """
-        log.info(
-            "Attempting to reconnect camera (after %d failed reads)...",
-            failures_so_far,
-        )
+        if self._spawning.is_set():
+            return
+        self._spawning.set()
+        threading.Thread(target=self._spawn_worker, daemon=True).start()
+
+    def _spawn_worker(self):
         try:
-            return self._open_capture()
+            cap = self._open_new_capture()
+            worker = _CaptureWorker(cap)
+            worker.start()
+            old_worker = self._worker
+            self._worker = worker
+            self.cap = cap
+            if old_worker is not None:
+                old_worker.stop()
         except Exception as exc:
             log.error("Camera reconnect attempt failed: %s", exc, exc_info=True)
-            self.connected = False
-            return False
+        finally:
+            self._spawning.clear()
 
     def _update(self):
         """
-        Internal worker thread that continuously reads frames from the camera.
-
-        Both the read and any post-processing are guarded so an unexpected
-        exception (e.g. the device disappearing mid-read) can't silently
-        kill this thread and leave the app serving a stale frame forever.
-        On sustained read failures, the capture device is automatically
-        reopened using a fast-detect + backoff strategy (see module
-        docstring) so the live feed recovers as soon as the camera is
-        available again.
+        Supervisor loop. Never touches a VideoCapture directly - it only
+        reads timestamps published by the current worker and decides
+        whether to replace that worker. This means it can never itself get
+        stuck, regardless of what the underlying camera/driver does.
         """
-        consecutive_failures = 0
-        next_reconnect_attempt = 0.0
         backoff = RECONNECT_MIN_INTERVAL
+        next_reconnect_attempt = 0.0
+        stalled_logged = False
 
         while self.running:
             t0 = time.perf_counter()
 
-            # Manual reconnect request (e.g. a "retry" button in the UI),
-            # honored immediately regardless of the current failure count
-            # or backoff timer.
             if self._force_reconnect.is_set():
                 self._force_reconnect.clear()
-                self._attempt_reconnect(consecutive_failures)
-                consecutive_failures = 0
+                self._start_new_worker()
                 backoff = RECONNECT_MIN_INTERVAL
                 next_reconnect_attempt = 0.0
 
-            try:
-                ret, frame = self.cap.read()
-            except Exception as exc:
-                log.error("Camera read raised an exception: %s", exc, exc_info=True)
-                ret, frame = False, None
+            worker = self._worker
+            frame, ts = worker.latest() if worker is not None else (None, 0.0)
+            now = time.monotonic()
+            fresh = frame is not None and (now - ts) < STALE_TIMEOUT
 
-            if ret and frame is not None:
-                if consecutive_failures > 0:
-                    log.info(
-                        "Camera recovered after %d failed reads",
-                        consecutive_failures,
-                    )
-                consecutive_failures = 0
-                backoff = RECONNECT_MIN_INTERVAL
+            if fresh:
+                if not self.connected:
+                    log.info("Camera recovered")
                 self.connected = True
+                stalled_logged = False
+                backoff = RECONNECT_MIN_INTERVAL
                 try:
                     # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
-                    frame = cv2.flip(frame, self._flip)
+                    processed = cv2.flip(frame, self._flip)
                     rotation = self.app_state.get_camera_rotation() if self.app_state else 0
                     if rotation == 1:
-                        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                        processed = cv2.rotate(processed, cv2.ROTATE_90_CLOCKWISE)
                     elif rotation == 2:
-                        frame = cv2.rotate(frame, cv2.ROTATE_180)
+                        processed = cv2.rotate(processed, cv2.ROTATE_180)
                     elif rotation == 3:
-                        frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                        processed = cv2.rotate(processed, cv2.ROTATE_90_COUNTERCLOCKWISE)
                     # rotation == 0: no rotation
                     with self.lock:
-                        self.latest_frame = frame
+                        self.latest_frame = processed
                 except Exception as exc:
                     log.error("Frame post-processing failed: %s", exc, exc_info=True)
             else:
-                consecutive_failures += 1
-                if consecutive_failures == 1:
-                    log.warning("Camera frame read failed")
+                if self.connected:
                     self.connected = False
+                if not stalled_logged:
+                    log.warning(
+                        "Camera feed stalled (no frame for >%.1fs); attempting recovery",
+                        STALE_TIMEOUT,
+                    )
+                    stalled_logged = True
 
-                if consecutive_failures >= FAILURE_THRESHOLD:
-                    now = time.monotonic()
-                    if now >= next_reconnect_attempt:
-                        success = self._attempt_reconnect(consecutive_failures)
-                        if success:
-                            backoff = RECONNECT_MIN_INTERVAL
-                        else:
-                            backoff = min(backoff * 2, RECONNECT_MAX_INTERVAL)
-                        next_reconnect_attempt = now + backoff
+                if now >= next_reconnect_attempt:
+                    log.info("Attempting to reconnect camera...")
+                    self._start_new_worker()
+                    backoff = min(backoff * 2, RECONNECT_MAX_INTERVAL)
+                    next_reconnect_attempt = now + backoff
 
             elapsed = time.perf_counter() - t0
             remaining = TARGET - elapsed
@@ -211,8 +277,9 @@ class Camera:
 
     def is_connected(self):
         """
-        Returns whether the last read from the camera succeeded. Useful for
-        surfacing a "camera disconnected / reconnecting..." state in the UI.
+        Returns whether the camera is currently producing fresh frames.
+        Useful for surfacing a "camera disconnected / reconnecting..."
+        state in the UI.
         """
         return self.connected
 
@@ -220,8 +287,7 @@ class Camera:
         """
         Requests an immediate reconnect attempt, bypassing the current
         backoff wait. Safe to call from any thread (e.g. a manual "retry"
-        button) since the actual VideoCapture access still only ever
-        happens on the camera's own update thread.
+        button).
         """
         self._force_reconnect.set()
 
@@ -231,4 +297,5 @@ class Camera:
         """
         log.info("Camera release called")
         self.running = False
-        self.cap.release()
+        if self._worker is not None:
+            self._worker.stop()
