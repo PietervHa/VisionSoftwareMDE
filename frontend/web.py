@@ -3,9 +3,10 @@ import hmac
 import io
 import json
 import os
+import secrets
 from datetime import date, datetime, timedelta
 import cv2
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,6 +104,13 @@ def create_app(camera, app_state) -> FastAPI:
 
     JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
 
+    def _is_maintenance_access(request: Request) -> bool:
+        if not app_state.get_maintenance_mode():
+            return False
+
+        cookie_token = request.cookies.get("maintenance_session", "")
+        return bool(cookie_token) and cookie_token == app_state.get_maintenance_session_token()
+
     def generate_frames():
         if not cfg["hmi"]["enable_video_feed"]:
             import numpy as np
@@ -152,16 +160,27 @@ def create_app(camera, app_state) -> FastAPI:
             if remaining_ms > 0:
                 time.sleep(remaining_ms / 1000)
 
+    # Applied to the index page and the /status auth check so that no
+    # browser, proxy, or embedded kiosk webview caches a response that
+    # reflects maintenance access. Without this, some webviews can satisfy
+    # a back-button navigation straight from disk/HTTP cache instead of
+    # hitting the network, bypassing the pageshow/bfcache reload in hmi.js.
+    _NO_STORE_HEADERS = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
     @app.get("/")
     def index():
         template_path = Path(__file__).resolve().parent / "templates" / "hmi.html"
-        return FileResponse(template_path)
+        return FileResponse(template_path, headers=_NO_STORE_HEADERS)
 
     @app.get("/status")
-    def get_status():
+    def get_status(request: Request, response: Response):
+        response.headers.update(_NO_STORE_HEADERS)
         return {
             "vision_mode": app_state.get_vision_mode(),
-            "maintenance_mode": app_state.get_maintenance_mode(),
+            "maintenance_mode": _is_maintenance_access(request),
             "machine_id": cfg["machine_id"],
             "version": "1.0.0",
         }
@@ -175,33 +194,48 @@ def create_app(camera, app_state) -> FastAPI:
         return {"threshold": app_state.get_threshold()}
 
     @app.post("/threshold")
-    def set_threshold(body: ThresholdBody):
-        if not app_state.get_maintenance_mode():
+    def set_threshold(body: ThresholdBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.set_threshold(body.threshold)
         return {"threshold": app_state.get_threshold()}
 
     @app.post("/maintenance_mode")
-    def set_maintenance_mode(body: MaintenanceModeBody):
+    def set_maintenance_mode(body: MaintenanceModeBody, response: Response):
         # Entering maintenance mode always requires the correct password.
         if body.maintenance_mode:
             expected_password = os.environ.get("MAINTENANCE_PASSWORD", "")
             if not expected_password or not hmac.compare_digest(body.password, expected_password):
                 return JSONResponse(status_code=403, content={"error": "Incorrect password"})
 
-        app_state.set_maintenance_mode(body.maintenance_mode)
-        return {"maintenance_mode": app_state.get_maintenance_mode()}
+            session_token = secrets.token_urlsafe(24)
+            app_state.set_maintenance_mode(True)
+            app_state.set_maintenance_session_token(session_token)
+            response.set_cookie(
+                "maintenance_session",
+                session_token,
+                httponly=True,
+                samesite="lax",
+                max_age=60 * 30,
+                path="/",
+            )
+            return {"maintenance_mode": True}
+
+        app_state.set_maintenance_mode(False)
+        app_state.set_maintenance_session_token("")
+        response.delete_cookie("maintenance_session", path="/")
+        return {"maintenance_mode": False}
 
     @app.post("/vision_mode")
-    def set_vision_mode(body: VisionModeBody):
-        if not app_state.get_maintenance_mode():
+    def set_vision_mode(body: VisionModeBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.set_vision_mode(body.vision_mode)
         return {"vision_mode": app_state.get_vision_mode()}
 
     @app.post("/camera_rotation")
-    def rotate_camera():
-        if not app_state.get_maintenance_mode():
+    def rotate_camera(request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.rotate_camera()
         return {"camera_rotation": app_state.get_camera_rotation()}
@@ -211,8 +245,8 @@ def create_app(camera, app_state) -> FastAPI:
         return {"ocr_keyword": app_state.get_ocr_keyword()}
 
     @app.post("/ocr_keyword")
-    def set_ocr_keyword(body: OcrKeywordBody):
-        if not app_state.get_maintenance_mode():
+    def set_ocr_keyword(body: OcrKeywordBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         new_keyword = body.ocr_keyword.strip()
         if not new_keyword:
@@ -221,8 +255,8 @@ def create_app(camera, app_state) -> FastAPI:
         return {"ocr_keyword": app_state.get_ocr_keyword()}
 
     @app.post("/load_classifier")
-    def load_classifier(body: LoadClassifierBody):
-        if not app_state.get_maintenance_mode():
+    def load_classifier(body: LoadClassifierBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         model_path = body.model_path.strip()
         resolved_path = _resolve_repo_path(model_path)

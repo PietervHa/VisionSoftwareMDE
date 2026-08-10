@@ -102,9 +102,12 @@ async function updateResult() {
 }
 
 async function loadStatus() {
-    const res = await fetch("/status");
+    // cache: "no-store" ensures this always hits the server for a fresh
+    // maintenance-access check, rather than a browser-cached /status reply.
+    const res = await fetch("/status", { credentials: "same-origin", cache: "no-store" });
     const data = await res.json();
     VISION_MODE = data.vision_mode;
+    CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
     updateVisionModeButtons();
 }
 
@@ -202,6 +205,7 @@ async function captureDatasetImage(label) {
 
         const res = await fetch('/dataset/capture', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ label })
         });
@@ -233,6 +237,7 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     try {
         await fetch("/threshold", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threshold: value })
         });
@@ -337,6 +342,7 @@ async function applyVisionMode(mode) {
     try {
         await fetch("/vision_mode", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ vision_mode: mode })
         });
@@ -355,6 +361,7 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
 
     fetch("/maintenance_mode", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ maintenance_mode: false })
     }).then((res) => {
@@ -379,6 +386,7 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", async (
     try {
         const res = await fetch("/maintenance_mode", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ maintenance_mode: true, password: userPass })
         });
@@ -411,6 +419,7 @@ document.getElementById("rotateCameraBtn").addEventListener("click", async () =>
     if (CURRENT_MODE !== "maintenance") return;
     await fetch("/camera_rotation", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({})
     });
@@ -422,6 +431,7 @@ document.getElementById("applyOcrKeyword").addEventListener("click", async () =>
     if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
     await fetch("/ocr_keyword", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ocr_keyword: value })
     });
@@ -473,6 +483,12 @@ async function init() {
 window.addEventListener("pageshow", (event) => {
     if (event.persisted) {
         window.location.reload();
+    }
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        loadStatus().then(applyMode);
     }
 });
 
