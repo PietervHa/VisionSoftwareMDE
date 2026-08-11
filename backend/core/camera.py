@@ -12,7 +12,7 @@ and each needs its own detection strategy:
   1. read() returns (False, None) - the easy case.
   2. read() blocks forever (observed with DirectShow on Windows once the
      USB device vanishes) - a strategy that only reacts *after* read()
-     returns never runs in that case.
+     returns never runs in this case.
   3. read() keeps returning (True, <same frame as before>) - some
      DirectShow drivers keep serving the last buffered frame instead of
      failing once the device is gone. A strategy that only checks "did we
@@ -62,6 +62,22 @@ pointed at a completely static scene, so this is a safe signal - it only
 fires when the driver is truly re-serving the same buffer. FROZEN_TIMEOUT
 is set well above STALE_TIMEOUT to give a wide margin.
 
+Device selection
+-----------------
+On Windows, opening a camera by plain numeric index (cv2.VideoCapture(0))
+is fragile: when the configured USB camera is unplugged, the OS renumbers
+the remaining devices, so index 0 can silently start pointing at a
+completely different camera (e.g. a laptop's built-in webcam). That
+webcam is a real, live camera, so it passes every health check above and
+gets reported as "connected" - just the wrong one.
+
+To avoid this, when camera.device_name is set, _resolve_camera_index()
+re-enumerates the currently connected cameras by friendly name (via
+pygrabber, Windows-only) on *every* (re)connect attempt and only opens the
+device whose name matches. If no matching device is currently connected,
+no capture is opened at all - the app correctly waits, instead of
+grabbing whatever else happens to be sitting at index 0.
+
 Trade-off: because a thread blocked inside a C-level call can't be forced
 to stop from Python, an abandoned worker may leak until its read() call
 eventually returns or the process exits. worker.stop() does a best-effort
@@ -80,6 +96,10 @@ from backend.utils.logger import get_logger
 
 log = get_logger(__name__)
 TARGET = 1 / 30  # Target time per frame for ~30 FPS
+
+# Cached across calls so a missing pygrabber install (or a lookup failure)
+# is only logged once instead of spamming every reconnect attempt.
+_device_name_lookup_warned = False
 
 # How long we tolerate zero fresh frames before treating the camera as
 # stalled/disconnected. Set comfortably above the sub-second read hiccups
@@ -101,6 +121,54 @@ FROZEN_TIMEOUT = 4.0
 # open attempts.
 RECONNECT_MIN_INTERVAL = 0.25
 RECONNECT_MAX_INTERVAL = 2.0
+
+
+def _resolve_camera_index(cam_cfg):
+    """
+    Decides which numeric camera index to open this attempt.
+
+    If cam_cfg["device_name"] is set (Windows only), the current list of
+    connected camera devices is re-enumerated by name on *every* call -
+    indices are not cached, because they can shift as devices are plugged
+    and unplugged. Returns the index of the device whose friendly name
+    contains device_name (case-insensitive).
+
+    If no currently-connected device matches, returns None. Callers must
+    treat None as "don't open anything" rather than falling back to a
+    bare numeric index - falling back is exactly what lets an unrelated
+    camera (e.g. a laptop's built-in webcam) get silently opened once the
+    real device disappears and indices renumber.
+
+    If device_name isn't set, or we're not on Windows, or the lookup
+    itself fails (e.g. pygrabber not installed), falls back to the plain
+    numeric cam_cfg["index"] - the old, simple behaviour.
+    """
+    global _device_name_lookup_warned
+    device_name = (cam_cfg.get("device_name") or "").strip()
+    if not device_name or sys.platform != "win32":
+        return cam_cfg["index"]
+
+    try:
+        from pygrabber.dshow_graph import FilterGraph
+        devices = FilterGraph().get_input_devices()
+    except Exception as exc:
+        if not _device_name_lookup_warned:
+            log.error(
+                "Could not enumerate camera devices to resolve "
+                "camera.device_name=%r (%s). Falling back to numeric "
+                "camera.index=%s, which may open the wrong camera (e.g. a "
+                "laptop's built-in webcam) if the USB camera renumbers. "
+                "Install pygrabber to fix this: pip install pygrabber",
+                device_name, exc, cam_cfg["index"],
+            )
+            _device_name_lookup_warned = True
+        return cam_cfg["index"]
+
+    for idx, name in enumerate(devices):
+        if device_name.lower() in name.lower():
+            return idx
+
+    return None
 
 
 class _CaptureWorker(threading.Thread):
@@ -212,13 +280,29 @@ class Camera:
 
     def _open_new_capture(self):
         """
-        Opens a brand new VideoCapture using the configured index/resolution.
-        Does not touch any existing capture/worker - callers own that.
+        Opens a brand new VideoCapture using the configured index/resolution
+        (or, when camera.device_name is set, the specific USB camera
+        resolved by name - see _resolve_camera_index). Does not touch any
+        existing capture/worker - callers own that.
         """
         cam_cfg = cfg["camera"]
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
 
-        cap = cv2.VideoCapture(cam_cfg["index"], backend)
+        resolved_index = _resolve_camera_index(cam_cfg)
+        if resolved_index is None:
+            # The named USB camera isn't among the currently connected
+            # devices. Deliberately return an unopened VideoCapture instead
+            # of falling back to a numeric index - opening *something* here
+            # is exactly how a laptop's built-in webcam gets grabbed by
+            # accident once the USB camera disappears and indices shift.
+            log.warning(
+                "USB camera device_name=%r not found among connected "
+                "cameras; waiting for it to be plugged in.",
+                cam_cfg.get("device_name", ""),
+            )
+            return cv2.VideoCapture()
+
+        cap = cv2.VideoCapture(resolved_index, backend)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
@@ -228,12 +312,12 @@ class Camera:
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             log.info(
                 "Camera opened successfully: index=%s resolution=%sx%s",
-                cam_cfg["index"],
+                resolved_index,
                 width,
                 height,
             )
         else:
-            log.error("Camera failed to open: index=%s", cam_cfg["index"])
+            log.error("Camera failed to open: index=%s", resolved_index)
 
         return cap
 
