@@ -12,7 +12,7 @@ and each needs its own detection strategy:
   1. read() returns (False, None) - the easy case.
   2. read() blocks forever (observed with DirectShow on Windows once the
      USB device vanishes) - a strategy that only reacts *after* read()
-     returns never runs in this case.
+     returns never runs in that case.
   3. read() keeps returning (True, <same frame as before>) - some
      DirectShow drivers keep serving the last buffered frame instead of
      failing once the device is gone. A strategy that only checks "did we
@@ -22,11 +22,11 @@ To handle all three, capture is split into two parts:
 
   - _CaptureWorker: a small dedicated thread that does nothing but call
     cap.read() in a loop and publish the latest successful frame, the time
-    it arrived, AND the time its *content* last actually changed (case 3).
-    If its read() call hangs (case 2), this thread simply sits there - it
-    is never joined or waited on.
+    it arrived, and whether the content has ever been *observed to change*
+    (case 3). If its read() call hangs (case 2), this thread simply sits
+    there - it is never joined or waited on.
 
-  - Camera._update (the supervisor): watches both signals from the
+  - Camera._update (the supervisor): watches these signals from the
     *current* worker. If no frame has arrived recently (case 1/2), or
     frames are arriving but their content hasn't changed in a while
     (case 3), the camera is considered stalled/disconnected. The
@@ -40,6 +40,20 @@ To handle all three, capture is split into two parts:
     first frame before it's judged stalled - without this, a worker that
     simply hasn't warmed up yet (normal autoexposure/init delay) would be
     torn down and replaced before it ever got a chance to work.
+
+A subtlety with case 3: on some Windows/DirectShow setups, when the
+physical device is gone, cv2.VideoCapture(index).isOpened() still returns
+True and the very *first* read() after opening succeeds too (serving one
+cached/placeholder frame), even though nothing further will ever change.
+If "connected" were set the moment a single frame arrives, this produces
+a false "Camera recovered" every reconnect cycle, followed ~FROZEN_TIMEOUT
+seconds later by another "stalled" - an endless open/close loop that never
+reflects reality. To guard against this, a worker is only allowed to be
+treated as healthy once it has been *observed* to deliver two genuinely
+different frames (a real sensor's per-pixel noise makes two bit-identical
+frames from a live feed essentially impossible, so this costs at most a
+frame or two of extra latency on a real camera, while a driver replaying
+one static buffer can never satisfy it).
 
 The frozen-frame check (case 3) compares raw frame content byte-for-byte.
 A live sensor essentially never produces two bit-identical frames in a
@@ -92,11 +106,12 @@ RECONNECT_MAX_INTERVAL = 2.0
 class _CaptureWorker(threading.Thread):
     """
     Owns exactly one cv2.VideoCapture instance and does nothing but read
-    from it in a loop, publishing (frame, timestamp, content_changed_at)
-    to whoever asks via latest(). Deliberately dumb: it has no opinion
-    about reconnecting - if its read() call hangs (device disappeared
-    mid-capture), this thread just sits there. The supervisor is the one
-    that decides when to stop trusting a worker and start a fresh one.
+    from it in a loop, publishing (frame, timestamp, content_changed_at,
+    verified_live) to whoever asks via latest(). Deliberately dumb: it has
+    no opinion about reconnecting - if its read() call hangs (device
+    disappeared mid-capture), this thread just sits there. The supervisor
+    is the one that decides when to stop trusting a worker and start a
+    fresh one.
     """
     def __init__(self, cap):
         super().__init__(daemon=True)
@@ -110,6 +125,11 @@ class _CaptureWorker(threading.Thread):
         self._timestamp = 0.0
         self._last_raw_frame = None
         self._content_changed_at = self.started_at
+        # Only flips to True once we've seen the frame content genuinely
+        # change at least once. A worker whose device is actually gone but
+        # whose driver keeps re-serving one cached frame will never reach
+        # this - which is exactly the point (see module docstring).
+        self._verified_live = False
 
     def run(self):
         while not self._stop_requested:
@@ -123,8 +143,12 @@ class _CaptureWorker(threading.Thread):
             if ret and frame is not None:
                 now = time.monotonic()
                 with self._lock:
-                    if self._last_raw_frame is None or not np.array_equal(frame, self._last_raw_frame):
+                    # Only the *second and later* frames can prove the feed
+                    # is actually live - the first frame is just a baseline
+                    # to compare against, not evidence of anything by itself.
+                    if self._last_raw_frame is not None and not np.array_equal(frame, self._last_raw_frame):
                         self._content_changed_at = now
+                        self._verified_live = True
                     self._last_raw_frame = frame
                     self._frame = frame
                     self._timestamp = now
@@ -140,10 +164,11 @@ class _CaptureWorker(threading.Thread):
     def latest(self):
         """
         Thread-safe read of (frame, timestamp of last successful read,
-        timestamp the frame content last actually changed).
+        timestamp the frame content last actually changed, whether the
+        feed has ever been observed to change at all).
         """
         with self._lock:
-            return self._frame, self._timestamp, self._content_changed_at
+            return self._frame, self._timestamp, self._content_changed_at, self._verified_live
 
     def stop(self):
         """
@@ -261,17 +286,23 @@ class Camera:
             worker = self._worker
             now = time.monotonic()
             if worker is not None:
-                frame, ts, content_changed_at = worker.latest()
+                frame, ts, content_changed_at, verified_live = worker.latest()
                 worker_age = now - worker.started_at
             else:
-                frame, ts, content_changed_at = None, 0.0, 0.0
+                frame, ts, content_changed_at, verified_live = None, 0.0, 0.0, False
                 worker_age = float("inf")
 
             has_recent_read = frame is not None and (now - ts) < STALE_TIMEOUT
             not_frozen = (now - content_changed_at) < FROZEN_TIMEOUT
 
-            if has_recent_read and not_frozen:
-                # Healthy: current worker has delivered a recent, changing frame.
+            # verified_live is the key guard against case 3 (see module
+            # docstring): a worker whose device is actually gone but whose
+            # driver keeps re-serving one cached frame will have
+            # has_recent_read=True forever, but will never earn
+            # verified_live, so it can never be reported as healthy here.
+            if has_recent_read and not_frozen and verified_live:
+                # Healthy: current worker has delivered a recent, genuinely
+                # changing frame.
                 if not self.connected:
                     log.info("Camera recovered")
                 self.connected = True
@@ -301,7 +332,8 @@ class Camera:
             else:
                 # Genuinely stalled/disconnected: either no recent frame at
                 # all, or the driver is re-serving the same cached frame
-                # (some DirectShow drivers do this instead of failing).
+                # (some DirectShow drivers do this instead of failing) and
+                # has never proven itself live.
                 if self.connected:
                     self.connected = False
                 if not stalled_logged:
@@ -312,7 +344,7 @@ class Camera:
                         )
                     else:
                         log.warning(
-                            "Camera feed frozen (identical frame for >%.1fs); attempting recovery",
+                            "Camera feed frozen (no genuine frame change for >%.1fs); attempting recovery",
                             FROZEN_TIMEOUT,
                         )
                     stalled_logged = True
@@ -337,9 +369,9 @@ class Camera:
 
     def is_connected(self):
         """
-        Returns whether the camera is currently producing fresh frames.
-        Useful for surfacing a "camera disconnected / reconnecting..."
-        state in the UI.
+        Returns whether the camera is currently producing fresh, genuinely
+        changing frames. Useful for surfacing a "camera disconnected /
+        reconnecting..." state in the UI.
         """
         return self.connected
 
