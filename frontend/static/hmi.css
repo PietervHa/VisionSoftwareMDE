@@ -325,4 +325,51 @@
     color: #fff;
 }
 
+/* Camera disconnected overlay: shown over the live feed while the backend
+   is retrying the connection after an established camera dropped out. */
+.camera-disconnected-overlay {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 5;
+    pointer-events: none;
+}
+.camera-disconnected-overlay[hidden] { display: none; }
+
+.camera-disconnected-text {
+    padding: 14px 22px;
+    font-size: 18px;
+    font-weight: bold;
+    color: #fff;
+    background: rgba(155, 28, 28, 0.9);
+    border-radius: 8px;
+}
+
+/* Missing camera modal: shown when no camera has been seen at all since
+   the page loaded (i.e. it was missing from the start). */
+.modal-overlay {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 100;
+}
+.modal-overlay[hidden] { display: none; }
+
+.modal-box {
+    background: #1c1c1c;
+    border: 1px solid #9b1c1c;
+    border-radius: 10px;
+    padding: 30px 40px;
+    text-align: center;
+    max-width: 420px;
+}
+.modal-box h2 { margin-top: 0; color: #ff5c5c; }
+.modal-sub { color: #aaa; font-size: 14px; }
+
 

@@ -1,13 +1,19 @@
+import csv
+import hmac
+import io
 import json
 import os
+import secrets
 from datetime import date, datetime, timedelta
 import cv2
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
 from pydantic import BaseModel
 from pathlib import Path
+from backend.core import db
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
 from tools.capture_dataset import DatasetCapture
@@ -21,12 +27,42 @@ def _resolve_repo_path(path: str) -> Path:
     return resolved.resolve()
 
 
+# Columns that always appear first, in this order, in an export.
+_CORE_EXPORT_COLUMNS = [
+    "timestamp", "status", "mode", "confidence_threshold",
+    "processing_time_ms", "cycle_time_ms", "error",
+]
+
+
+def _build_export_table(results: list) -> tuple:
+    extra_columns = set()
+    for r in results:
+        extra_columns.update(k for k in r.keys() if k not in _CORE_EXPORT_COLUMNS)
+    headers = _CORE_EXPORT_COLUMNS + sorted(extra_columns)
+
+    rows = []
+    for r in results:
+        row = []
+        for col in headers:
+            value = r.get(col)
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False)
+            row.append(value)
+        rows.append(row)
+    return headers, rows
+
+
+# --- Request bodies -------------------------------------------------------
+# Pydantic models replace Flask's `request.json or {}` pattern. Defaults
+# mirror the old `data.get(key, default)` calls exactly.
+
 class ThresholdBody(BaseModel):
     threshold: float = 0.5
 
 
 class MaintenanceModeBody(BaseModel):
     maintenance_mode: bool = False
+    password: str = ""
 
 
 class VisionModeBody(BaseModel):
@@ -48,6 +84,8 @@ class DatasetCaptureBody(BaseModel):
 def create_app(camera, app_state) -> FastAPI:
     app = FastAPI()
 
+    db.init_db()
+
     # flask-cors' CORS(app) defaults to allowing all origins/methods/headers
     # without credentials; this mirrors that.
     app.add_middleware(
@@ -65,6 +103,13 @@ def create_app(camera, app_state) -> FastAPI:
     dataset_capture = DatasetCapture()
 
     JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
+
+    def _is_maintenance_access(request: Request) -> bool:
+        if not app_state.get_maintenance_mode():
+            return False
+
+        cookie_token = request.cookies.get("maintenance_session", "")
+        return bool(cookie_token) and cookie_token == app_state.get_maintenance_session_token()
 
     def generate_frames():
         if not cfg["hmi"]["enable_video_feed"]:
@@ -115,16 +160,27 @@ def create_app(camera, app_state) -> FastAPI:
             if remaining_ms > 0:
                 time.sleep(remaining_ms / 1000)
 
+    # Applied to the index page and the /status auth check so that no
+    # browser, proxy, or embedded kiosk webview caches a response that
+    # reflects maintenance access. Without this, some webviews can satisfy
+    # a back-button navigation straight from disk/HTTP cache instead of
+    # hitting the network, bypassing the pageshow/bfcache reload in hmi.js.
+    _NO_STORE_HEADERS = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
     @app.get("/")
     def index():
         template_path = Path(__file__).resolve().parent / "templates" / "hmi.html"
-        return FileResponse(template_path)
+        return FileResponse(template_path, headers=_NO_STORE_HEADERS)
 
     @app.get("/status")
-    def get_status():
+    def get_status(request: Request, response: Response):
+        response.headers.update(_NO_STORE_HEADERS)
         return {
             "vision_mode": app_state.get_vision_mode(),
-            "maintenance_mode": app_state.get_maintenance_mode(),
+            "maintenance_mode": _is_maintenance_access(request),
             "machine_id": cfg["machine_id"],
             "version": "1.0.0",
         }
@@ -138,27 +194,48 @@ def create_app(camera, app_state) -> FastAPI:
         return {"threshold": app_state.get_threshold()}
 
     @app.post("/threshold")
-    def set_threshold(body: ThresholdBody):
-        if not app_state.get_maintenance_mode():
+    def set_threshold(body: ThresholdBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.set_threshold(body.threshold)
         return {"threshold": app_state.get_threshold()}
 
     @app.post("/maintenance_mode")
-    def set_maintenance_mode(body: MaintenanceModeBody):
-        app_state.set_maintenance_mode(body.maintenance_mode)
-        return {"maintenance_mode": app_state.get_maintenance_mode()}
+    def set_maintenance_mode(body: MaintenanceModeBody, response: Response):
+        # Entering maintenance mode always requires the correct password.
+        if body.maintenance_mode:
+            expected_password = os.environ.get("MAINTENANCE_PASSWORD", "")
+            if not expected_password or not hmac.compare_digest(body.password, expected_password):
+                return JSONResponse(status_code=403, content={"error": "Incorrect password"})
+
+            session_token = secrets.token_urlsafe(24)
+            app_state.set_maintenance_mode(True)
+            app_state.set_maintenance_session_token(session_token)
+            response.set_cookie(
+                "maintenance_session",
+                session_token,
+                httponly=True,
+                samesite="lax",
+                max_age=60 * 30,
+                path="/",
+            )
+            return {"maintenance_mode": True}
+
+        app_state.set_maintenance_mode(False)
+        app_state.set_maintenance_session_token("")
+        response.delete_cookie("maintenance_session", path="/")
+        return {"maintenance_mode": False}
 
     @app.post("/vision_mode")
-    def set_vision_mode(body: VisionModeBody):
-        if not app_state.get_maintenance_mode():
+    def set_vision_mode(body: VisionModeBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.set_vision_mode(body.vision_mode)
         return {"vision_mode": app_state.get_vision_mode()}
 
     @app.post("/camera_rotation")
-    def rotate_camera():
-        if not app_state.get_maintenance_mode():
+    def rotate_camera(request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.rotate_camera()
         return {"camera_rotation": app_state.get_camera_rotation()}
@@ -168,8 +245,8 @@ def create_app(camera, app_state) -> FastAPI:
         return {"ocr_keyword": app_state.get_ocr_keyword()}
 
     @app.post("/ocr_keyword")
-    def set_ocr_keyword(body: OcrKeywordBody):
-        if not app_state.get_maintenance_mode():
+    def set_ocr_keyword(body: OcrKeywordBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         new_keyword = body.ocr_keyword.strip()
         if not new_keyword:
@@ -177,14 +254,9 @@ def create_app(camera, app_state) -> FastAPI:
         app_state.set_ocr_keyword(new_keyword)
         return {"ocr_keyword": app_state.get_ocr_keyword()}
 
-    @app.get("/maintenance_password")
-    def get_maintenance_password():
-        password = os.environ.get("MAINTENANCE_PASSWORD", "")
-        return {"maintenance_password": password}
-
     @app.post("/load_classifier")
-    def load_classifier(body: LoadClassifierBody):
-        if not app_state.get_maintenance_mode():
+    def load_classifier(body: LoadClassifierBody, request: Request):
+        if not _is_maintenance_access(request):
             return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         model_path = body.model_path.strip()
         resolved_path = _resolve_repo_path(model_path)
@@ -207,6 +279,13 @@ def create_app(camera, app_state) -> FastAPI:
             generate_frames(),
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
+
+    @app.get("/camera_status")
+    def camera_status(response: Response):
+        # Polled by the HMI to drive the "reconnecting..." overlay and the
+        # "missing camera" popup. No auth required - it's read-only status.
+        response.headers.update(_NO_STORE_HEADERS)
+        return {"connected": camera.is_connected()}
 
     @app.post("/reset_counters")
     def reset_counters():
@@ -255,11 +334,6 @@ def create_app(camera, app_state) -> FastAPI:
     @app.get("/analytics/data")
     def analytics_data(date_param: str = Query(default="", alias="date")):
         try:
-            result_dir = cfg.get("output", {}).get("result_dir", "data/results")
-            output_dir = Path(result_dir)
-            if not output_dir.is_absolute():
-                output_dir = Path(__file__).resolve().parents[1] / output_dir
-
             # Parse requested date, default to today, clamp to 7-day window
             today = date.today()
             min_date = today - timedelta(days=6)  # 7 days including today
@@ -276,18 +350,7 @@ def create_app(camera, app_state) -> FastAPI:
             if requested_date < min_date:
                 requested_date = min_date
 
-            daily_file = output_dir / f"{requested_date.isoformat()}.jsonl"
-
-            results = []
-            if daily_file.exists():
-                with daily_file.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            try:
-                                results.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
+            results = db.query_summary(requested_date, requested_date)
 
             total = len(results)
             ok_count = sum(1 for r in results if r.get("status") == "OK")
@@ -304,33 +367,26 @@ def create_app(camera, app_state) -> FastAPI:
             # Build timeline: group results by hour (0-23), count OK and NOK per hour
             timeline = {str(h): {"ok": 0, "nok": 0} for h in range(24)}
             for r in results:
-                ts = r.get("timestamp", "")
-                try:
-                    hour = str(datetime.fromisoformat(ts).hour)
-                    if r.get("status") == "OK":
-                        timeline[hour]["ok"] += 1
-                    else:
-                        timeline[hour]["nok"] += 1
-                except Exception:
+                ts = r.get("timestamp")
+                if not isinstance(ts, datetime):
                     continue
+                hour = str(ts.hour)
+                if r.get("status") == "OK":
+                    timeline[hour]["ok"] += 1
+                else:
+                    timeline[hour]["nok"] += 1
 
             # Builds speed timeline in 15-minute buckets
             # Key format: "HH:MM" for each 15-min slot (00:00, 00:15, 00:30, 00:45, 01:00 ...)
             speed_buckets = {}
             for r in results:
-                ts = r.get("timestamp", "")
+                ts = r.get("timestamp")
                 pt = r.get("processing_time_ms")
-                if not isinstance(pt, (int, float)):
+                if not isinstance(pt, (int, float)) or not isinstance(ts, datetime):
                     continue
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    minute_slot = (dt.minute // 15) * 15
-                    key = f"{dt.hour:02d}:{minute_slot:02d}"
-                    if key not in speed_buckets:
-                        speed_buckets[key] = []
-                    speed_buckets[key].append(float(pt))
-                except Exception:
-                    continue
+                minute_slot = (ts.minute // 15) * 15
+                key = f"{ts.hour:02d}:{minute_slot:02d}"
+                speed_buckets.setdefault(key, []).append(float(pt))
 
             speed_timeline = {}
             for key, times in speed_buckets.items():
@@ -352,6 +408,65 @@ def create_app(camera, app_state) -> FastAPI:
                 "timeline": timeline,
                 "speed_timeline": speed_timeline,
             }
+
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    @app.get("/analytics/export")
+    def analytics_export(
+        start: str = Query(default=""),
+        end: str = Query(default=""),
+        export_format: str = Query(default="csv", alias="format"),
+    ):
+        try:
+            try:
+                start_date = date.fromisoformat(start)
+                end_date = date.fromisoformat(end)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "start and end must be dates in YYYY-MM-DD format"},
+                )
+
+            if start_date > end_date:
+                start_date, end_date = end_date, start_date
+
+            if export_format not in ("csv", "xlsx"):
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "format must be 'csv' or 'xlsx'"},
+                )
+
+            results = db.query_full(start_date, end_date)
+            headers, rows = _build_export_table(results)
+            filename_base = f"inspections_{start_date.isoformat()}_to_{end_date.isoformat()}"
+
+            if export_format == "csv":
+                buffer = io.StringIO()
+                writer = csv.writer(buffer)
+                writer.writerow(headers)
+                writer.writerows(rows)
+                # utf-8-sig so Excel recognizes the encoding instead of mangling accented characters
+                csv_bytes = buffer.getvalue().encode("utf-8-sig")
+                return Response(
+                    content=csv_bytes,
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+                )
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Inspections"
+            sheet.append(headers)
+            for row in rows:
+                sheet.append(row)
+            xlsx_buffer = io.BytesIO()
+            workbook.save(xlsx_buffer)
+            return Response(
+                content=xlsx_buffer.getvalue(),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+            )
 
         except Exception as exc:
             return JSONResponse(status_code=500, content={"error": str(exc)})

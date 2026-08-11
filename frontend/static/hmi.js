@@ -1,9 +1,7 @@
-﻿let CURRENT_MODE = "maintenance";
+let CURRENT_MODE = "production";
 let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
-let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
-let PASSWORD = null; // Loaded from backend
 let LAST_DATASET_COUNTS_FETCH = 0;
 const DATASET_COUNTS_POLL_MS = 5000;
 let DATASET_CAPTURE_ACTIVE = false;
@@ -104,11 +102,12 @@ async function updateResult() {
 }
 
 async function loadStatus() {
-    const res = await fetch("/status");
+    // cache: "no-store" ensures this always hits the server for a fresh
+    // maintenance-access check, rather than a browser-cached /status reply.
+    const res = await fetch("/status", { credentials: "same-origin", cache: "no-store" });
     const data = await res.json();
     VISION_MODE = data.vision_mode;
     CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
-    LAST_SYNCED_MODE = CURRENT_MODE;
     updateVisionModeButtons();
 }
 
@@ -140,16 +139,6 @@ async function loadOcrKeyword() {
     const res = await fetch("/ocr_keyword");
     const data = await res.json();
     document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
-}
-
-async function loadMaintenancePassword() {
-    try {
-        const res = await fetch("/maintenance_password");
-        const data = await res.json();
-        PASSWORD = data.maintenance_password || "";
-    } catch (e) {
-        console.error("Failed to load maintenance password:", e);
-    }
 }
 
 function updateDatasetCaptureUI() {
@@ -204,6 +193,70 @@ function toggleDatasetCapture() {
     }
 }
 
+
+/* =========================
+   CAMERA CONNECTION MONITORING
+========================= */
+let CAMERA_CONNECTED = null;       // null = not polled yet
+let CAMERA_EVER_CONNECTED = false; // false the whole time => "missing from the start"
+const CAMERA_STATUS_POLL_MS = 1000;
+
+function reloadCameraFeed() {
+    const img = document.getElementById("cameraFeed");
+    if (!img) return;
+    // Cache-bust so the browser opens a brand new MJPEG connection instead
+    // of trusting a stream that may have gone stale while the camera was
+    // disconnected.
+    img.src = "/video_feed?t=" + Date.now();
+}
+
+async function pollCameraStatus() {
+    try {
+        const res = await fetch("/camera_status", { cache: "no-store" });
+        const data = await res.json();
+        const connected = !!data.connected;
+
+        const overlay = document.getElementById("cameraDisconnectedOverlay");
+        const modal = document.getElementById("missingCameraModal");
+        const wasConnected = CAMERA_CONNECTED;
+
+        if (connected) {
+            // Reload the feed on the transition into "connected" (covers
+            // both a reconnect after a drop and the camera showing up for
+            // the first time), so the live feed is guaranteed fresh.
+            if (wasConnected !== true) {
+                reloadCameraFeed();
+            }
+            CAMERA_CONNECTED = true;
+            CAMERA_EVER_CONNECTED = true;
+            if (overlay) overlay.hidden = true;
+            if (modal) modal.hidden = true;
+        } else {
+            CAMERA_CONNECTED = false;
+            if (!CAMERA_EVER_CONNECTED) {
+                // Never seen a frame since the page loaded: camera was
+                // missing from the start, so block with the popup.
+                if (modal) modal.hidden = false;
+                if (overlay) overlay.hidden = true;
+            } else {
+                // It was working before and just dropped out; recovery is
+                // already running in the background, so just show a light
+                // "reconnecting" overlay on the feed itself.
+                if (overlay) overlay.hidden = false;
+                if (modal) modal.hidden = true;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to fetch camera status:", e);
+    }
+}
+
+function startCameraStatusPolling() {
+    pollCameraStatus();
+    setInterval(pollCameraStatus, CAMERA_STATUS_POLL_MS);
+}
+
+
 /* =========================
    DATASET CAPTURE
 ========================= */
@@ -216,6 +269,7 @@ async function captureDatasetImage(label) {
 
         const res = await fetch('/dataset/capture', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ label })
         });
@@ -247,6 +301,7 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     try {
         await fetch("/threshold", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threshold: value })
         });
@@ -271,7 +326,6 @@ function applyMode() {
     const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
     const rotateBtn = document.getElementById("rotateCameraBtn");
-    const previousMode = LAST_APPLIED_MODE;
 
     if (rotateBtn) {
         rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
@@ -334,27 +388,6 @@ function applyMode() {
     }
 
     updateDatasetCaptureUI();
-
-    if (previousMode !== null && previousMode !== CURRENT_MODE) {
-        syncModeToBackend();
-    }
-}
-
-async function syncModeToBackend() {
-    if (LAST_SYNCED_MODE === CURRENT_MODE) return;
-
-    LAST_SYNCED_MODE = CURRENT_MODE;
-
-    try {
-        await fetch("/maintenance_mode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ maintenance_mode: CURRENT_MODE === "maintenance" })
-        });
-    } catch (e) {
-        LAST_SYNCED_MODE = null;
-        console.error("Failed to sync maintenance mode:", e);
-    }
 }
 
 async function applyVisionMode(mode) {
@@ -373,6 +406,7 @@ async function applyVisionMode(mode) {
     try {
         await fetch("/vision_mode", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ vision_mode: mode })
         });
@@ -389,15 +423,45 @@ async function applyVisionMode(mode) {
 document.getElementById("startProductionBtn").addEventListener("click", () => {
     if (!confirm("Start production mode?\n\nConfidence threshold will be locked.")) return;
 
-    CURRENT_MODE = "production";
-    applyMode();
+    fetch("/maintenance_mode", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ maintenance_mode: false })
+    }).then((res) => {
+        if (!res.ok) {
+            alert("Could not switch to production mode.");
+            return;
+        }
+
+        CURRENT_MODE = "production";
+        applyMode();
+    }).catch((e) => {
+        console.error("Failed to switch to production mode:", e);
+        alert("Could not reach the server. Please try again.");
+    });
 });
 
-document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
-    // Prompt for password without auto-filling it
+document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
     const userPass = prompt("Enter password to enter maintenance mode:");
-    if (userPass !== PASSWORD) {
-        alert("Incorrect password. Access denied.");
+    if (userPass === null) return; // prompt cancelled
+
+    // The password is checked server-side; the client never sees the real value.
+    try {
+        const res = await fetch("/maintenance_mode", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maintenance_mode: true, password: userPass })
+        });
+
+        if (!res.ok) {
+            alert("Incorrect password. Access denied.");
+            return;
+        }
+    } catch (e) {
+        console.error("Failed to enter maintenance mode:", e);
+        alert("Could not reach the server. Please try again.");
         return;
     }
 
@@ -419,6 +483,7 @@ document.getElementById("rotateCameraBtn").addEventListener("click", async () =>
     if (CURRENT_MODE !== "maintenance") return;
     await fetch("/camera_rotation", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({})
     });
@@ -430,6 +495,7 @@ document.getElementById("applyOcrKeyword").addEventListener("click", async () =>
     if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
     await fetch("/ocr_keyword", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ocr_keyword: value })
     });
@@ -448,7 +514,7 @@ document.getElementById("captureToggleBtn").addEventListener("click", () => {
 /* Keyboard shortcuts for dataset capture */
 document.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
-    
+
     if (key === "1" && DATASET_CAPTURE_ACTIVE) {
         e.preventDefault();
         captureDatasetImage("ok");
@@ -470,13 +536,25 @@ async function init() {
         await loadStatus();
         await loadThreshold();
         await loadOcrKeyword();
-        await loadMaintenancePassword();
         applyMode();
 
         startResultPolling();
+        startCameraStatusPolling();
     } catch (e) {
         console.error("Initialization failed:", e);
     }
 }
+
+window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+        window.location.reload();
+    }
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        loadStatus().then(applyMode);
+    }
+});
 
 init();

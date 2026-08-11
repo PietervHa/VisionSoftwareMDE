@@ -27,7 +27,8 @@ class AppState:
             "total": 0,
         }
         self.confidence_threshold = 0.0
-        self.maintenance_mode = True
+        self.maintenance_mode = False
+        self.maintenance_session_token = ""
         self.camera_rotation = 0  # steps: 0, 1, 2, 3 (each = 90° clockwise)
         self.vision_mode = cfg["vision_mode"]
         self.ocr_keyword = cfg["ocr"]["keywords"][0] if cfg["ocr"]["keywords"] else ""
@@ -104,6 +105,20 @@ class AppState:
         """
         with self.lock:
             self.maintenance_mode = bool(value)
+
+    def get_maintenance_session_token(self) -> str:
+        """
+        Gets the session token that authorizes maintenance mode in the browser.
+        """
+        with self.lock:
+            return self.maintenance_session_token
+
+    def set_maintenance_session_token(self, value: str):
+        """
+        Stores or clears the maintenance session token.
+        """
+        with self.lock:
+            self.maintenance_session_token = str(value or "")
 
     def get_camera_rotation(self) -> int:
         """
@@ -189,4 +204,3 @@ class AppState:
 
         self.set_classifier_loaded(model_path if loaded else "")
         return loaded
-

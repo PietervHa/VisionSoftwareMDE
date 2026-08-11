@@ -25,6 +25,19 @@
             <div id="refreshError" class="refresh-error">Failed to refresh</div>
         </header>
 
+        <section class="export-panel">
+            <div class="export-label">Export inspection data</div>
+            <div class="export-controls">
+                <label for="export-start">From</label>
+                <input type="date" id="export-start">
+                <label for="export-end">To</label>
+                <input type="date" id="export-end">
+                <button id="btn-export-csv" class="tab-btn">Export CSV</button>
+                <button id="btn-export-xlsx" class="tab-btn">Export Excel</button>
+            </div>
+            <div id="exportError" class="refresh-error"></div>
+        </section>
+
         <section class="cards">
             <article class="card">
                 <div class="card-label">Total Inspections</div>
@@ -67,4 +80,3 @@
     <script src="/static/analytics.js"></script>
 </body>
 </html>
-
