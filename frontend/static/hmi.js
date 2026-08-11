@@ -193,6 +193,70 @@ function toggleDatasetCapture() {
     }
 }
 
+
+/* =========================
+   CAMERA CONNECTION MONITORING
+========================= */
+let CAMERA_CONNECTED = null;       // null = not polled yet
+let CAMERA_EVER_CONNECTED = false; // false the whole time => "missing from the start"
+const CAMERA_STATUS_POLL_MS = 1000;
+
+function reloadCameraFeed() {
+    const img = document.getElementById("cameraFeed");
+    if (!img) return;
+    // Cache-bust so the browser opens a brand new MJPEG connection instead
+    // of trusting a stream that may have gone stale while the camera was
+    // disconnected.
+    img.src = "/video_feed?t=" + Date.now();
+}
+
+async function pollCameraStatus() {
+    try {
+        const res = await fetch("/camera_status", { cache: "no-store" });
+        const data = await res.json();
+        const connected = !!data.connected;
+
+        const overlay = document.getElementById("cameraDisconnectedOverlay");
+        const modal = document.getElementById("missingCameraModal");
+        const wasConnected = CAMERA_CONNECTED;
+
+        if (connected) {
+            // Reload the feed on the transition into "connected" (covers
+            // both a reconnect after a drop and the camera showing up for
+            // the first time), so the live feed is guaranteed fresh.
+            if (wasConnected !== true) {
+                reloadCameraFeed();
+            }
+            CAMERA_CONNECTED = true;
+            CAMERA_EVER_CONNECTED = true;
+            if (overlay) overlay.hidden = true;
+            if (modal) modal.hidden = true;
+        } else {
+            CAMERA_CONNECTED = false;
+            if (!CAMERA_EVER_CONNECTED) {
+                // Never seen a frame since the page loaded: camera was
+                // missing from the start, so block with the popup.
+                if (modal) modal.hidden = false;
+                if (overlay) overlay.hidden = true;
+            } else {
+                // It was working before and just dropped out; recovery is
+                // already running in the background, so just show a light
+                // "reconnecting" overlay on the feed itself.
+                if (overlay) overlay.hidden = false;
+                if (modal) modal.hidden = true;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to fetch camera status:", e);
+    }
+}
+
+function startCameraStatusPolling() {
+    pollCameraStatus();
+    setInterval(pollCameraStatus, CAMERA_STATUS_POLL_MS);
+}
+
+
 /* =========================
    DATASET CAPTURE
 ========================= */
@@ -475,6 +539,7 @@ async function init() {
         applyMode();
 
         startResultPolling();
+        startCameraStatusPolling();
     } catch (e) {
         console.error("Initialization failed:", e);
     }
