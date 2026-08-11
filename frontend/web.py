@@ -280,6 +280,13 @@ def create_app(camera, app_state) -> FastAPI:
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
+    @app.get("/camera_status")
+    def camera_status(response: Response):
+        # Polled by the HMI to drive the "reconnecting..." overlay and the
+        # "missing camera" popup. No auth required - it's read-only status.
+        response.headers.update(_NO_STORE_HEADERS)
+        return {"connected": camera.is_connected()}
+
     @app.post("/reset_counters")
     def reset_counters():
         app_state.reset_counters()
