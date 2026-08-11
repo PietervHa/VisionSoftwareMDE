@@ -31,6 +31,7 @@ ocr:
 
 # Camera settings
 camera:
+  device_name: "DFK 22BUC03" # <--- Change this to your camera's device name, Thanks to Peter for the tip'
   index: 0
   width: 1280
   height: 1024
