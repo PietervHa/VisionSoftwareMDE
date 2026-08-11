@@ -6,30 +6,47 @@ rotations and flipping based on configuration and application state.
 
 Recovery behaviour
 -------------------
-cv2.VideoCapture.read() is *not* guaranteed to fail fast when the device
-disappears mid-capture. In particular the DirectShow backend on Windows
-(cv2.CAP_DSHOW) is known to block indefinitely inside read() once the USB
-device is unplugged, rather than returning (False, None). A recovery
-strategy that only reacts *after* read() returns therefore never runs in
-that case - the thread is simply stuck.
+A camera can fail in three different ways when it disappears mid-capture,
+and each needs its own detection strategy:
 
-To make recovery work regardless of whether read() fails fast or hangs,
-capture is split into two parts:
+  1. read() returns (False, None) - the easy case.
+  2. read() blocks forever (observed with DirectShow on Windows once the
+     USB device vanishes) - a strategy that only reacts *after* read()
+     returns never runs in this case.
+  3. read() keeps returning (True, <same frame as before>) - some
+     DirectShow drivers keep serving the last buffered frame instead of
+     failing once the device is gone. A strategy that only checks "did we
+     get *a* frame recently" is blind to this, since frames keep "arriving".
+
+To handle all three, capture is split into two parts:
 
   - _CaptureWorker: a small dedicated thread that does nothing but call
-    cap.read() in a loop and publish the latest successful frame + the
-    time it arrived. If its read() call hangs, this thread simply sits
-    there - it is never joined or waited on.
+    cap.read() in a loop and publish the latest successful frame, the time
+    it arrived, AND the time its *content* last actually changed (case 3).
+    If its read() call hangs (case 2), this thread simply sits there - it
+    is never joined or waited on.
 
-  - Camera._update (the supervisor): watches how long it has been since
-    the *current* worker last published a fresh frame. If that exceeds
-    STALE_TIMEOUT, the camera is considered stalled/disconnected. The
+  - Camera._update (the supervisor): watches both signals from the
+    *current* worker. If no frame has arrived recently (case 1/2), or
+    frames are arriving but their content hasn't changed in a while
+    (case 3), the camera is considered stalled/disconnected. The
     supervisor then opens a brand new VideoCapture and spins up a brand
     new worker for it, and simply abandons the old (possibly still
     blocked) worker as a daemon thread - it is never relied upon again.
     Reconnect attempts use a short exponential backoff so a camera that
     comes back quickly is picked up almost instantly, while a camera
-    that stays absent doesn't get hammered with open attempts.
+    that stays absent doesn't get hammered with open attempts. Every
+    (re)started worker gets a STALE_TIMEOUT grace period to deliver its
+    first frame before it's judged stalled - without this, a worker that
+    simply hasn't warmed up yet (normal autoexposure/init delay) would be
+    torn down and replaced before it ever got a chance to work.
+
+The frozen-frame check (case 3) compares raw frame content byte-for-byte.
+A live sensor essentially never produces two bit-identical frames in a
+row (sensor noise alone makes that astronomically unlikely), even when
+pointed at a completely static scene, so this is a safe signal - it only
+fires when the driver is truly re-serving the same buffer. FROZEN_TIMEOUT
+is set well above STALE_TIMEOUT to give a wide margin.
 
 Trade-off: because a thread blocked inside a C-level call can't be forced
 to stop from Python, an abandoned worker may leak until its read() call
@@ -40,6 +57,7 @@ unable to recover at all.
 """
 
 import cv2
+import numpy as np
 import threading
 import time
 import sys
@@ -56,6 +74,13 @@ TARGET = 1 / 30  # Target time per frame for ~30 FPS
 # disconnect.
 STALE_TIMEOUT = 1.5
 
+# How long we tolerate the frame content staying byte-for-byte identical
+# before treating that as a stall too (driver serving a cached last frame
+# instead of failing). Kept well above STALE_TIMEOUT: it only needs to be
+# long enough that no normal camera would ever legitimately sit there,
+# not short enough to react instantly.
+FROZEN_TIMEOUT = 4.0
+
 # Backoff bounds (in seconds) between reopen attempts while the camera is
 # down. Starts fast so a quick replug is picked up almost immediately, and
 # backs off so a camera that stays unplugged doesn't get hammered with
@@ -67,19 +92,24 @@ RECONNECT_MAX_INTERVAL = 2.0
 class _CaptureWorker(threading.Thread):
     """
     Owns exactly one cv2.VideoCapture instance and does nothing but read
-    from it in a loop, publishing (frame, timestamp) to whoever asks via
-    latest(). Deliberately dumb: it has no opinion about reconnecting - if
-    its read() call hangs (device disappeared mid-capture), this thread
-    just sits there. The supervisor is the one that decides when to stop
-    trusting a worker and start a fresh one.
+    from it in a loop, publishing (frame, timestamp, content_changed_at)
+    to whoever asks via latest(). Deliberately dumb: it has no opinion
+    about reconnecting - if its read() call hangs (device disappeared
+    mid-capture), this thread just sits there. The supervisor is the one
+    that decides when to stop trusting a worker and start a fresh one.
     """
     def __init__(self, cap):
         super().__init__(daemon=True)
         self.cap = cap
+        # When this worker was created - used by the supervisor to grant a
+        # startup grace period before its first frame has to have arrived.
+        self.started_at = time.monotonic()
         self._stop_requested = False
         self._lock = threading.Lock()
         self._frame = None
         self._timestamp = 0.0
+        self._last_raw_frame = None
+        self._content_changed_at = self.started_at
 
     def run(self):
         while not self._stop_requested:
@@ -91,9 +121,13 @@ class _CaptureWorker(threading.Thread):
                 ret, frame = False, None
 
             if ret and frame is not None:
+                now = time.monotonic()
                 with self._lock:
+                    if self._last_raw_frame is None or not np.array_equal(frame, self._last_raw_frame):
+                        self._content_changed_at = now
+                    self._last_raw_frame = frame
                     self._frame = frame
-                    self._timestamp = time.monotonic()
+                    self._timestamp = now
 
             # If read() blocked (e.g. device gone), this sleep is simply
             # never reached until it unblocks - that's fine, the
@@ -104,9 +138,12 @@ class _CaptureWorker(threading.Thread):
                 time.sleep(remaining)
 
     def latest(self):
-        """Thread-safe read of the most recent successful (frame, timestamp)."""
+        """
+        Thread-safe read of (frame, timestamp of last successful read,
+        timestamp the frame content last actually changed).
+        """
         with self._lock:
-            return self._frame, self._timestamp
+            return self._frame, self._timestamp, self._content_changed_at
 
     def stop(self):
         """
@@ -222,16 +259,25 @@ class Camera:
                 next_reconnect_attempt = 0.0
 
             worker = self._worker
-            frame, ts = worker.latest() if worker is not None else (None, 0.0)
             now = time.monotonic()
-            fresh = frame is not None and (now - ts) < STALE_TIMEOUT
+            if worker is not None:
+                frame, ts, content_changed_at = worker.latest()
+                worker_age = now - worker.started_at
+            else:
+                frame, ts, content_changed_at = None, 0.0, 0.0
+                worker_age = float("inf")
 
-            if fresh:
+            has_recent_read = frame is not None and (now - ts) < STALE_TIMEOUT
+            not_frozen = (now - content_changed_at) < FROZEN_TIMEOUT
+
+            if has_recent_read and not_frozen:
+                # Healthy: current worker has delivered a recent, changing frame.
                 if not self.connected:
                     log.info("Camera recovered")
                 self.connected = True
                 stalled_logged = False
                 backoff = RECONNECT_MIN_INTERVAL
+                next_reconnect_attempt = 0.0
                 try:
                     # Flip the frame (1 = horizontal, 0 = vertical, -1 = both)
                     processed = cv2.flip(frame, self._flip)
@@ -247,14 +293,28 @@ class Camera:
                         self.latest_frame = processed
                 except Exception as exc:
                     log.error("Frame post-processing failed: %s", exc, exc_info=True)
+
+            elif worker_age < STALE_TIMEOUT:
+                # Worker is still warming up: wait for it to deliver a frame.
+                pass
+
             else:
+                # Genuinely stalled/disconnected: either no recent frame at
+                # all, or the driver is re-serving the same cached frame
+                # (some DirectShow drivers do this instead of failing).
                 if self.connected:
                     self.connected = False
                 if not stalled_logged:
-                    log.warning(
-                        "Camera feed stalled (no frame for >%.1fs); attempting recovery",
-                        STALE_TIMEOUT,
-                    )
+                    if not has_recent_read:
+                        log.warning(
+                            "Camera feed stalled (no frame for >%.1fs); attempting recovery",
+                            STALE_TIMEOUT,
+                        )
+                    else:
+                        log.warning(
+                            "Camera feed frozen (identical frame for >%.1fs); attempting recovery",
+                            FROZEN_TIMEOUT,
+                        )
                     stalled_logged = True
 
                 if now >= next_reconnect_attempt:

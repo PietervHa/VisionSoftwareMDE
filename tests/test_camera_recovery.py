@@ -3,9 +3,13 @@ Standalone smoke test for the Camera recovery logic in camera.py.
 
 Stubs out cv2 and the backend.* imports so the module can be exercised
 without OpenCV or the real project. Includes a FakeVideoCapture that can
-either fail fast OR *block* inside read() while the device is "unplugged"
-(reproducing the DirectShow-on-Windows hang), to prove recovery works in
-both cases.
+simulate all three disconnect failure modes seen in practice:
+  - fail fast: read() returns (False, None)
+  - hang: read() blocks (reproducing the DirectShow-on-Windows hang)
+  - freeze: read() keeps returning (True, <same frame as before>)
+    (some DirectShow drivers re-serve the last buffered frame instead
+    of failing once the device is gone - this is what real hardware
+    testing surfaced: the app never noticed the disconnect at all)
 
 Run with: python3 test_camera_recovery.py
 """
@@ -14,6 +18,7 @@ import types
 import time
 import threading
 import unittest
+import numpy as np
 from unittest.mock import MagicMock
 
 
@@ -31,6 +36,13 @@ class FakeDevice:
         # If True, read() blocks (like a hung DirectShow call) while the
         # device is absent, instead of returning (False, None).
         self.hang_on_disconnect = False
+        # If True, read() keeps returning (True, <last frame>) while the
+        # device is absent, instead of failing or blocking.
+        self.freeze_on_disconnect = False
+        # Simulates real camera warm-up: each freshly opened VideoCapture
+        # returns (False, None) for this many seconds after being opened,
+        # before it starts delivering real frames.
+        self.warmup_seconds = 0.0
 
     def set_present(self, value):
         self.present = value
@@ -49,6 +61,8 @@ class FakeVideoCapture:
         self.backend = backend
         self._opened = DEVICE.present
         self._released = False
+        self._last_frame = None
+        self._created_at = time.monotonic()
 
     def set(self, prop, value):
         return True
@@ -64,6 +78,12 @@ class FakeVideoCapture:
             return False, None
 
         if not DEVICE.present:
+            if DEVICE.freeze_on_disconnect:
+                # Driver keeps re-serving the last frame it ever had,
+                # forever, instead of failing.
+                if self._last_frame is not None:
+                    return True, self._last_frame
+                return False, None
             if DEVICE.hang_on_disconnect:
                 # Simulate a DirectShow-style hang: block until the device
                 # comes back (or this capture is released out from under us).
@@ -78,8 +98,13 @@ class FakeVideoCapture:
         if not self._opened:
             return False, None
 
+        if time.monotonic() - self._created_at < DEVICE.warmup_seconds:
+            return False, None
+
         DEVICE.frame_counter += 1
-        return True, {"frame_id": DEVICE.frame_counter}
+        frame = np.full((4, 4, 3), DEVICE.frame_counter % 256, dtype=np.uint8)
+        self._last_frame = frame
+        return True, frame
 
     def release(self):
         self._released = True
@@ -138,6 +163,8 @@ class CameraRecoveryTests(unittest.TestCase):
         DEVICE.present_event.set()
         DEVICE.frame_counter = 0
         DEVICE.hang_on_disconnect = False
+        DEVICE.freeze_on_disconnect = False
+        DEVICE.warmup_seconds = 0.0
         self.cam = camera_module.Camera(app_state=None)
         self.assertTrue(
             wait_until(lambda: self.cam.get_frame() is not None),
@@ -191,7 +218,7 @@ class CameraRecoveryTests(unittest.TestCase):
 
         last_frame = self.cam.get_frame()
         self.assertTrue(
-            wait_until(lambda: self.cam.get_frame() != last_frame, timeout=1.0),
+            wait_until(lambda: not np.array_equal(self.cam.get_frame(), last_frame), timeout=1.0),
             "live feed did not resume producing new frames after recovery",
         )
 
@@ -207,6 +234,76 @@ class CameraRecoveryTests(unittest.TestCase):
             wait_until(lambda: self.cam.is_connected(), timeout=1.5),
             "manual reconnect() did not recover promptly",
         )
+
+    def test_recovers_from_frozen_frame(self):
+        """
+        Regression test for the real-world symptom in the second log:
+        the driver keeps returning ret=True with the exact same buffered
+        frame after disconnect, instead of failing or hanging. Content-
+        based staleness must catch this even though reads keep "succeeding".
+        """
+        # Speed up the test by shrinking FROZEN_TIMEOUT for this run only.
+        original_frozen_timeout = camera_module.FROZEN_TIMEOUT
+        camera_module.FROZEN_TIMEOUT = 0.5
+        try:
+            DEVICE.freeze_on_disconnect = True
+            DEVICE.set_present(False)
+
+            self.assertTrue(
+                wait_until(lambda: not self.cam.is_connected(), timeout=2.0),
+                "supervisor never detected the frozen (identical) frame feed",
+            )
+
+            DEVICE.set_present(True)
+            self.assertTrue(
+                wait_until(lambda: self.cam.is_connected(), timeout=3.0),
+                "camera did not recover after replug (frozen-frame case)",
+            )
+
+            last_frame = self.cam.get_frame()
+            self.assertTrue(
+                wait_until(
+                    lambda: not np.array_equal(self.cam.get_frame(), last_frame),
+                    timeout=1.0,
+                ),
+                "live feed did not resume producing new frames after recovery",
+            )
+        finally:
+            camera_module.FROZEN_TIMEOUT = original_frozen_timeout
+
+    def test_survives_realistic_camera_warmup(self):
+        """
+        Regression test for the startup race: a freshly (re)started worker
+        needs a moment before it delivers its first frame (real cameras
+        have autoexposure/init delay). The supervisor must NOT treat that
+        as a stall and tear the worker down before it gets a chance -
+        which previously caused the camera to never stabilize at all.
+        """
+        self.cam.release()  # tear down the instant-warmup camera from setUp
+
+        DEVICE.warmup_seconds = 0.4  # plausible real-world camera init delay
+        DEVICE.frame_counter = 0
+        cam = camera_module.Camera(app_state=None)
+        try:
+            self.assertTrue(
+                wait_until(lambda: cam.is_connected(), timeout=3.0),
+                "camera never became connected despite a normal warm-up delay",
+            )
+            # Once connected, it must STAY connected - no thrashing/flapping.
+            still_connected = True
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if not cam.is_connected():
+                    still_connected = False
+                    break
+                time.sleep(0.02)
+            self.assertTrue(
+                still_connected,
+                "camera flapped disconnected shortly after connecting "
+                "(supervisor is thrashing the worker)",
+            )
+        finally:
+            cam.release()
 
     def test_stays_down_while_unplugged_no_crash(self):
         DEVICE.hang_on_disconnect = True
