@@ -6,9 +6,9 @@ line as a row via backend.core.db.insert_result(), so existing inspection
 history isn't lost when switching from file-based storage to the database.
 
 Usage:
-    python tools/migrate_jsonl_to_db.py
-    python tools/migrate_jsonl_to_db.py --dry-run
-    python tools/migrate_jsonl_to_db.py --force   # re-run even if the table already has rows
+    python object_detection_tools/migrate_jsonl_to_db.py
+    python object_detection_tools/migrate_jsonl_to_db.py --dry-run
+    python object_detection_tools/migrate_jsonl_to_db.py --force   # re-run even if the table already has rows
 
 Safe to run from a fresh checkout: it only reads data/results/*.jsonl and
 writes to the database configured in config.yaml. It refuses to run twice
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 # Make `backend.*` importable regardless of how this script is invoked
-# (running it directly puts only tools/ on sys.path, not the repo root).
+# (running it directly puts only object_detection_tools/ on sys.path, not the repo root).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import func, select
