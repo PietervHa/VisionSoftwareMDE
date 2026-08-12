@@ -16,7 +16,9 @@ from backend.detection.objectdetection import run_object_detection
 from backend.detection.ocr import OCR
 from backend.utils.logger import get_logger
 import time
-import torch # noqa: F401
+import os
+import torch
+torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
 
 logger = get_logger(__name__)
 
@@ -24,7 +26,7 @@ logger = get_logger(__name__)
 VISION_MODE = cfg["vision_mode"]
 
 # Global instances managed by this module
-ocr_instance = OCR()
+ocr_instance = None
 _inspection_engine: Optional[InspectionEngine] = None
 _app_state: Optional[Any] = None
 _cached_vision_mode: str = cfg.get("vision_mode", "object_detection")
