@@ -16,6 +16,7 @@ from backend.detection.objectdetection import run_object_detection
 from backend.detection.ocr import OCR
 from backend.utils.logger import get_logger
 import time
+import torch # noqa: F401
 
 logger = get_logger(__name__)
 
