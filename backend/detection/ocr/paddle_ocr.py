@@ -49,6 +49,16 @@ class PaddleOCR:
             self.keywords,
         )
 
+    def warmup(self) -> None:
+        """Runs one throwaway OCR pass so Paddle's native-runtime cold-start
+        cost is paid at startup instead of during the first real OCR cycle."""
+        try:
+            import numpy as np
+            self._paddle.ocr(np.zeros((64, 64, 3), dtype="uint8"))
+            log.debug("PaddleOCR warm-up inference completed.")
+        except Exception as exc:
+            log.warning("PaddleOCR warm-up inference failed (non-fatal): %s", exc)
+
     def _preprocess_image(self, frame):
         """Enhance image contrast and clarity for better OCR"""
         mode = self.preprocess_mode

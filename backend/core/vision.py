@@ -62,6 +62,8 @@ def bind_app_state(app_state) -> None:
     _app_state = app_state
     _cached_vision_mode = cfg.get("vision_mode", "object_detection")
     ocr_instance = OCR(app_state=app_state)
+    if hasattr(ocr_instance, "warmup"):
+        ocr_instance.warmup()
     _inspection_engine = InspectionEngine(app_state)
 
     od_cfg = cfg.get("object_detection", {})
