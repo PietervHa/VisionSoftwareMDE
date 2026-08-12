@@ -136,6 +136,7 @@ class InspectionEngine:
                 return False
 
             self._classifier = classifier
+            classifier.warmup()
             return True
         except Exception as exc:
             logger.error("Failed to load classifier: model_path=%s error=%s", model_path, exc)

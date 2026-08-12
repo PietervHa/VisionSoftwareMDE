@@ -98,6 +98,18 @@ class ImageClassifier:
             "all_scores": all_scores,
         }
 
+    def warmup(self) -> None:
+        """Runs one throwaway inference so the native-runtime cold-start cost
+        (thread pool spin-up, oneDNN/MKL kernel selection) is paid at startup
+        instead of during the first real inspection cycle."""
+        if self.model is None or self.processor is None:
+            return
+        try:
+            self.predict(Image.new("RGB", (224, 224)))
+            logger.debug("Classifier warm-up inference completed.")
+        except Exception as exc:
+            logger.warning("Classifier warm-up inference failed (non-fatal): %s", exc)
+
     def is_loaded(self) -> bool:
         """
         Checks if the model and processor have been successfully loaded.
