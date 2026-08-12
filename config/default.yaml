@@ -98,6 +98,16 @@ database:
   url: "sqlite:///data/results.db"
 
 # Trigger settings
+# Automated long-running Q trigger for vision testing
+# Disabled by default so normal application startup is unchanged.
+trigger_test:
+  enabled: true
+  startup_delay_s: 30.0
+  interval_s: 1.0
+  max_hours: 8.0
+  max_images: 10000
+
+# Trigger settings
 trigger:
   enabled: false        # Set to true to activate TCP trigger listener
   type: "tcp"
