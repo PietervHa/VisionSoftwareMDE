@@ -85,8 +85,7 @@ def vision_trigger_loop(camera, app_state):
 
             frame = camera.get_frame()
             if frame is None:
-                log.warning("No frame available")
-                continue
+                log.warning("No frame available; reporting NOK")
 
             # Track trigger time for cycle time measurement
             trigger_time = time.perf_counter()

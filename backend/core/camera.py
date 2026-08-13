@@ -420,6 +420,8 @@ class Camera:
                 # has never proven itself live.
                 if self.connected:
                     self.connected = False
+                with self.lock:
+                    self.latest_frame = None
                 if not stalled_logged:
                     if not has_recent_read:
                         log.warning(
@@ -449,7 +451,9 @@ class Camera:
         Retrieves a thread-safe copy of the latest captured frame.
         """
         with self.lock:
-            return None if self.latest_frame is None else self.latest_frame.copy()
+            if not self.connected or self.latest_frame is None:
+                return None
+            return self.latest_frame.copy()
 
     def is_connected(self):
         """

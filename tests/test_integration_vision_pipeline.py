@@ -73,6 +73,16 @@ class VisionIntegrationTests(unittest.TestCase):
         result = vision.run_vision(frame=object())
         self.assertEqual(result["status"], "NOK")
 
+    def test_run_vision_returns_nok_for_missing_frame(self):
+        vision._app_state = _FakeAppState(mode="object_detection", threshold=0.8)
+        vision._inspection_engine = _FakeEngine({"status": "OK"})
+
+        result = vision.run_vision(frame=None)
+
+        self.assertEqual(result["status"], "NOK")
+        self.assertEqual(result["error"], "no_frame")
+        self.assertEqual(result["detections"], [])
+
     def test_run_vision_callback_path_returns_normalized_payload(self):
         vision._app_state = _FakeAppState(mode="object_detection", threshold=0.1)
         vision._inspection_engine = _FakeEngine(
@@ -97,6 +107,23 @@ class VisionIntegrationTests(unittest.TestCase):
         self.assertEqual(captured["mode"], "object_detection")
         self.assertEqual(len(captured["detections"]), 1)
         self.assertEqual(captured["detections"][0]["label"], "non-defective")
+
+    def test_run_vision_callback_path_returns_nok_for_missing_frame(self):
+        vision._app_state = _FakeAppState(mode="object_detection", threshold=0.1)
+        vision._inspection_engine = _FakeEngine({"status": "OK"})
+
+        event = threading.Event()
+        captured = {}
+
+        def callback(result):
+            captured.update(result)
+            event.set()
+
+        vision.run_vision(frame=None, callback=callback)
+        self.assertTrue(event.wait(2.0), "vision callback did not complete in time")
+
+        self.assertEqual(captured["status"], "NOK")
+        self.assertEqual(captured["error"], "no_frame")
 
 
 class ResultWriterIntegrationTests(unittest.TestCase):
