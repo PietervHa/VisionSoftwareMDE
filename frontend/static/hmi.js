@@ -299,16 +299,22 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     }
 
     try {
-        await fetch("/threshold", {
+        const res = await fetch("/threshold", {
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threshold: value })
         });
 
+        if (!res.ok) {
+            alert("Failed to apply threshold: not in maintenance mode (session may have expired). Reload the page and try again.");
+            return;
+        }
+
         currentThreshold = value; // freeze this value for production
     } catch (e) {
         console.error("Failed to set threshold:", e);
+        alert("Failed to apply threshold: network error. Check the connection and try again.");
     }
 });
 
