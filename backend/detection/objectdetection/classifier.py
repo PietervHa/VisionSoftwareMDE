@@ -52,7 +52,11 @@ class ImageClassifier:
             self.device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
             model_dir_str = str(model_dir)
             self.processor = AutoImageProcessor.from_pretrained(model_dir_str)
-            self.model = AutoModelForImageClassification.from_pretrained(model_dir_str)
+            # use_safetensors=True refuses to fall back to a pickled pytorch_model.bin,
+            # which can execute arbitrary code on load. Only accept safetensors weights.
+            self.model = AutoModelForImageClassification.from_pretrained(
+                model_dir_str, use_safetensors=True
+            )
             self.model.to(self.device)
             self.model.eval()
             self.model_path = model_dir_str
@@ -60,6 +64,14 @@ class ImageClassifier:
             raise RuntimeError(
                 f"Unable to load classifier assets from '{model_dir}'. "
                 "Ensure required model files are present (for example config and weights)."
+            ) from exc
+        except OSError as exc:
+            # transformers raises OSError (not FileNotFoundError) when no
+            # safetensors weights are found in an otherwise valid model dir.
+            raise RuntimeError(
+                f"Classifier at '{model_dir}' has no safetensors weights. "
+                "Only .safetensors checkpoints are accepted (pickled .bin files are "
+                "rejected for security reasons); re-export the model as safetensors."
             ) from exc
 
     def predict(self, pil_image: Image.Image) -> Dict[str, object]:
@@ -115,4 +127,3 @@ class ImageClassifier:
         Checks if the model and processor have been successfully loaded.
         """
         return self.model is not None
-

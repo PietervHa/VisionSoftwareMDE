@@ -27,6 +27,23 @@ def _resolve_repo_path(path: str) -> Path:
     return resolved.resolve()
 
 
+# Only paths under this directory may be loaded as a classifier, even by a
+# maintenance-authenticated request. Prevents /load_classifier from being
+# pointed at an arbitrary location on disk.
+_MODELS_ROOT = (Path(__file__).resolve().parents[1] / "models").resolve()
+
+
+def _is_within_models_dir(resolved_path: Path) -> bool:
+    try:
+        return resolved_path.is_relative_to(_MODELS_ROOT)
+    except AttributeError:  # pragma: no cover - Python < 3.9 fallback
+        try:
+            resolved_path.relative_to(_MODELS_ROOT)
+            return True
+        except ValueError:
+            return False
+
+
 # Columns that always appear first, in this order, in an export.
 _CORE_EXPORT_COLUMNS = [
     "timestamp", "status", "mode", "confidence_threshold",
@@ -262,6 +279,11 @@ def create_app(camera, app_state) -> FastAPI:
         resolved_path = _resolve_repo_path(model_path)
         if not model_path or not resolved_path.exists():
             return JSONResponse(status_code=400, content={"error": "model_path does not exist"})
+        if not _is_within_models_dir(resolved_path):
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"model_path must be inside {_MODELS_ROOT.name}/"},
+            )
         classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
         return {"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)}
 
@@ -288,12 +310,16 @@ def create_app(camera, app_state) -> FastAPI:
         return {"connected": camera.is_connected()}
 
     @app.post("/reset_counters")
-    def reset_counters():
+    def reset_counters(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.reset_counters()
         return {"status": "counters reset"}
 
     @app.post("/dataset/capture")
-    def dataset_capture_route(body: DatasetCaptureBody):
+    def dataset_capture_route(body: DatasetCaptureBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"success": False, "error": "Not in maintenance mode"})
         label = body.label.lower()
         if label not in ("ok", "defective"):
             return JSONResponse(
