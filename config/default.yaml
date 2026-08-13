@@ -109,9 +109,9 @@ trigger_test:
 
 # Trigger settings
 trigger:
-  enabled: false        # Set to true to activate TCP trigger listener
+  enabled: true         # Set to true to activate TCP trigger listener
   type: "tcp"
-  host: "0.0.0.0"
+  host: "127.0.0.1"     # Local-only; change to 0.0.0.0 for a real PLC on the network
   port: 5001
   trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
   response_ok: "OK\n"   # Response sent back on OK result
