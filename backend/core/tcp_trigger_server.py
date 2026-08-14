@@ -142,8 +142,7 @@ class TCPTriggerServer:
 
         frame = self.camera.get_frame()
         if frame is None:
-            logger.warning("No frame available for TCP trigger")
-            return self.response_nok
+            logger.warning("No frame available for TCP trigger; returning NOK")
 
         trigger_time = time.perf_counter()
         self.run_vision_fn(frame, callback=callback)

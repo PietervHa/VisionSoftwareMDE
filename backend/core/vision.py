@@ -238,6 +238,21 @@ def run_vision(frame, callback=None, profile: bool = False):
     
     Supports both synchronous and asynchronous (via callback) execution.
     """
+    if frame is None:
+        no_frame_result = {
+            "status": "NOK",
+            "detections": [],
+            "processing_time_ms": 0,
+            "error": "no_frame",
+        }
+        mode_getter = getattr(_app_state, "get_vision_mode", None)
+        mode = mode_getter() if callable(mode_getter) else _cached_vision_mode
+        normalized = _normalize_result(no_frame_result, mode)
+        if callback:
+            callback(normalized)
+            return None
+        return normalized
+
     # The active mode is resolved from app state first so runtime changes win
     # over the cached startup configuration.
     mode_getter = getattr(_app_state, "get_vision_mode", None)

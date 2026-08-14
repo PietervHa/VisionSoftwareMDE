@@ -20,6 +20,7 @@ import threading
 import unittest
 import numpy as np
 from unittest.mock import MagicMock
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -111,24 +112,21 @@ class FakeVideoCapture:
         self._opened = False
 
 
-FAKE_CV2 = types.SimpleNamespace(
-    VideoCapture=FakeVideoCapture,
-    CAP_DSHOW=0,
-    CAP_ANY=0,
-    CAP_PROP_BUFFERSIZE=1,
-    CAP_PROP_FRAME_WIDTH=3,
-    CAP_PROP_FRAME_HEIGHT=4,
-    flip=lambda frame, code: frame,
-    rotate=lambda frame, code: frame,
-    ROTATE_90_CLOCKWISE=0,
-    ROTATE_180=1,
-    ROTATE_90_COUNTERCLOCKWISE=2,
-)
+FAKE_CV2 = types.ModuleType("cv2")
+FAKE_CV2.VideoCapture = FakeVideoCapture
+FAKE_CV2.CAP_DSHOW = 0
+FAKE_CV2.CAP_ANY = 0
+FAKE_CV2.CAP_PROP_BUFFERSIZE = 1
+FAKE_CV2.CAP_PROP_FRAME_WIDTH = 3
+FAKE_CV2.CAP_PROP_FRAME_HEIGHT = 4
+FAKE_CV2.flip = lambda frame, code: frame
+FAKE_CV2.rotate = lambda frame, code: frame
+FAKE_CV2.ROTATE_90_CLOCKWISE = 0
+FAKE_CV2.ROTATE_180 = 1
+FAKE_CV2.ROTATE_90_COUNTERCLOCKWISE = 2
 
 sys.modules["cv2"] = FAKE_CV2
 
-backend_pkg = types.ModuleType("backend")
-backend_core = types.ModuleType("backend.core")
 backend_utils = types.ModuleType("backend.utils")
 config_loader_mod = types.ModuleType("backend.core.config_loader")
 logger_mod = types.ModuleType("backend.utils.logger")
@@ -138,14 +136,12 @@ config_loader_mod.cfg = {
 }
 logger_mod.get_logger = lambda name: MagicMock()
 
-sys.modules["backend"] = backend_pkg
-sys.modules["backend.core"] = backend_core
 sys.modules["backend.utils"] = backend_utils
 sys.modules["backend.core.config_loader"] = config_loader_mod
 sys.modules["backend.utils.logger"] = logger_mod
 
-sys.path.insert(0, "/home/claude/work")
-import camera as camera_module  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.core import camera as camera_module  # noqa: E402
 
 
 def wait_until(predicate, timeout=3.0, interval=0.02):
@@ -268,6 +264,25 @@ class CameraRecoveryTests(unittest.TestCase):
                 ),
                 "live feed did not resume producing new frames after recovery",
             )
+        finally:
+            camera_module.FROZEN_TIMEOUT = original_frozen_timeout
+
+    def test_get_frame_returns_none_while_camera_is_disconnected(self):
+        """
+        Regression test for stale-frame leakage: once the camera is marked
+        disconnected, callers must not keep receiving the last good frame.
+        """
+        original_frozen_timeout = camera_module.FROZEN_TIMEOUT
+        camera_module.FROZEN_TIMEOUT = 0.5
+        try:
+            DEVICE.freeze_on_disconnect = True
+            DEVICE.set_present(False)
+
+            self.assertTrue(
+                wait_until(lambda: not self.cam.is_connected(), timeout=2.0),
+                "camera never transitioned to disconnected state",
+            )
+            self.assertIsNone(self.cam.get_frame())
         finally:
             camera_module.FROZEN_TIMEOUT = original_frozen_timeout
 

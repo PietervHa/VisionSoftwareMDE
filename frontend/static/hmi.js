@@ -299,16 +299,22 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     }
 
     try {
-        await fetch("/threshold", {
+        const res = await fetch("/threshold", {
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threshold: value })
         });
 
+        if (!res.ok) {
+            alert("Failed to apply threshold: not in maintenance mode (session may have expired). Reload the page and try again.");
+            return;
+        }
+
         currentThreshold = value; // freeze this value for production
     } catch (e) {
         console.error("Failed to set threshold:", e);
+        alert("Failed to apply threshold: network error. Check the connection and try again.");
     }
 });
 
@@ -326,6 +332,7 @@ function applyMode() {
     const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
     const rotateBtn = document.getElementById("rotateCameraBtn");
+    const resetBtn = document.getElementById("resetBtn");
 
     if (rotateBtn) {
         rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
@@ -338,6 +345,7 @@ function applyMode() {
         input.disabled = false;
         applyBtn.disabled = false;
         if (ocrApplyBtn) ocrApplyBtn.disabled = false;
+        if (resetBtn) resetBtn.disabled = false;
         const captureToggleBtn = document.getElementById("captureToggleBtn");
         if (captureToggleBtn) captureToggleBtn.disabled = false;
         prodBtn.style.display = "inline-block";
@@ -362,6 +370,7 @@ function applyMode() {
         input.disabled = true;
         applyBtn.disabled = true;
         if (ocrApplyBtn) ocrApplyBtn.disabled = true;
+        if (resetBtn) resetBtn.disabled = true;
         const captureToggleBtn = document.getElementById("captureToggleBtn");
         if (captureToggleBtn) captureToggleBtn.disabled = true;
         prodBtn.style.display = "none";
@@ -502,8 +511,12 @@ document.getElementById("applyOcrKeyword").addEventListener("click", async () =>
 });
 
 document.getElementById("resetBtn").addEventListener("click", async () => {
+    if (CURRENT_MODE !== "maintenance") return;
     if (!confirm("Are you sure you want to reset the counters?")) return;
-    await fetch("/reset_counters", { method: "POST" });
+    const res = await fetch("/reset_counters", { method: "POST", credentials: "same-origin" });
+    if (!res.ok) {
+        alert("Reset failed: not in maintenance mode (session may have expired). Reload the page and try again.");
+    }
 });
 
 document.getElementById("captureToggleBtn").addEventListener("click", () => {
