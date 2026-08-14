@@ -56,13 +56,25 @@ def _process_vision_result(result, trigger_time, app_state):
             log.error("Failed to write result file: %s", exc)
 
         detection_count = len(result.get("detections", []))
-        log.info(
-            "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s detections=%s",
-            status,
-            cycle_time_ms,
-            confidence,
-            detection_count,
-        )
+        failure_reason = result.get("failure_reason")
+
+        if failure_reason:
+            log.warning(
+                "VISION RESULT: status=%s reason=%s cycle_time_ms=%s confidence=%s detections=%s",
+                status,
+                failure_reason,
+                cycle_time_ms,
+                confidence,
+                detection_count,
+            )
+        else:
+            log.info(
+                "VISION RESULT: status=%s cycle_time_ms=%s confidence=%s detections=%s",
+                status,
+                cycle_time_ms,
+                confidence,
+                detection_count,
+            )
     except Exception as exc:
         log.error("Failed to process vision result: %s", exc)
 
