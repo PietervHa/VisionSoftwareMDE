@@ -334,16 +334,43 @@ class Camera:
 
     def _spawn_worker(self):
         try:
-            cap = self._open_new_capture()
-            worker = _CaptureWorker(cap)
-            worker.start()
+            # IMPORTANT:
+            # Release the previous capture BEFORE opening the replacement.
+            #
+            # Opening a second VideoCapture while the old worker can still be
+            # inside cap.read() may cause two native capture handles to compete
+            # for the same DirectShow camera. This can result in:
+            #
+            #   isOpened() == True
+            #   -> no real frames
+            #   -> repeated reconnects
+            #   -> OpenCV native/C++ exception
+            #
             old_worker = self._worker
-            self._worker = worker
-            self.cap = cap
+
+            # Detach the old worker from the supervisor first so no other
+            # supervisor iteration can treat it as the active worker.
+            self._worker = None
+            self.cap = None
+
             if old_worker is not None:
                 old_worker.stop()
+
+            # Only after the old capture has been released do we open another one.
+            cap = self._open_new_capture()
+
+            worker = _CaptureWorker(cap)
+            worker.start()
+
+            self._worker = worker
+            self.cap = cap
+
         except Exception as exc:
-            log.error("Camera reconnect attempt failed: %s", exc, exc_info=True)
+            log.error(
+                "Camera reconnect attempt failed: %s",
+                exc,
+                exc_info=True,
+            )
         finally:
             self._spawning.clear()
 
