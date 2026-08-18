@@ -119,5 +119,6 @@ trigger:
   timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
 
 # Security settings
-security:
-  maintenance_password: "SET_VIA_ENV"  # Password required to enter maintenance mode
+# Maintenance-mode login is per-user now (see the `users` table / QC_tools/manage_users.py),
+# not a single shared password, so there's nothing to configure here.
+security: {}

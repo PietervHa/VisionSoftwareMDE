@@ -100,24 +100,47 @@ The classifier model directory must contain `config.json`, `model.safetensors`, 
 
 ## Secrets
 
-Never commit API keys or passwords to Git. Set them via environment variables in a `.env` file (see `.env.example`):
+Never commit API keys to Git. Set them via environment variables in a `.env` file (see `.env.example`):
 
 ```
 ROBOFLOW_API_KEY=your_key_here
-MAINTENANCE_PASSWORD=your_password_here
 ```
 
-In `config/default.yaml`, leave the placeholders:
+In `config/default.yaml`, leave the placeholder:
 
 ```yaml
 roboflow:
   models:
     cola_detectie:
       api_key: "SET_VIA_ENV"
-
-security:
-  maintenance_password: "SET_VIA_ENV"
 ```
+
+---
+
+## Maintenance-mode login
+
+Maintenance mode is gated by per-user accounts stored in the `users` table (same database as inspection results — `database.url` in `config/default.yaml`), not a shared password. There is no registration page in the app on purpose; accounts are managed from the command line with `QC_tools/manage_users.py`, which needs shell access to the machine:
+
+```powershell
+# Create a user (prompts for a password via getpass, not shown on screen, not passed as an argument)
+python -m QC_tools.manage_users add <username>
+
+# Change a user's password
+python -m QC_tools.manage_users passwd <username>
+
+# List all users
+python -m QC_tools.manage_users list
+
+# Remove a user (asks you to re-type the username to confirm)
+python -m QC_tools.manage_users remove <username>
+
+# Show recent login attempts (successful and failed), newest first
+python -m QC_tools.manage_users logins [--limit N]
+```
+
+Passwords are hashed with `hashlib.scrypt` (stdlib, no extra dependency) before being stored — see `backend/core/auth.py`. Every login attempt against `/maintenance_mode`, including unknown usernames and wrong passwords, is recorded to the `login_log` table with a timestamp and IP address; the HMI shows the most recent entries in the "Recent Logins" panel while in maintenance mode.
+
+Maintenance sessions are single-active: logging in from a second device silently takes over the session, same as before this change — there's still just one operator "in" maintenance mode at a time, it's now just tied to a specific username instead of a shared password.
 
 ---
 
