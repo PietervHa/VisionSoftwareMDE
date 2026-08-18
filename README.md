@@ -25,12 +25,19 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` in the project root and replace the placeholder values before starting the application:
+Copy `.env.example` to `.env` in the project root and replace the placeholder value before starting the application:
 
 ```dotenv
 ROBOFLOW_API_KEY=your_key_here
-MAINTENANCE_PASSWORD=your_password_here
 ```
+
+Maintenance-mode access is per-user rather than a shared password. Create the first account with:
+
+```powershell
+python -m QC_tools.manage_users add <username>
+```
+
+You'll be prompted for a password (entered via `getpass`, not shown on screen). See `docs/configuration.md` for the full set of commands (`add`, `passwd`, `list`, `remove`, `logins`).
 
 ---
 
@@ -60,7 +67,7 @@ All settings are in `config/default.yaml`. The most relevant options:
 
 For the Roboflow backend: store the API key as an environment variable (`ROBOFLOW_API_KEY`) and reference it in the config, so the key is not stored in the repository.
 
-For maintenance functions: set the password in `MAINTENANCE_PASSWORD` instead of in `config/default.yaml`.
+For maintenance functions: accounts are managed with `python -m QC_tools.manage_users` (see `docs/configuration.md`), not a config value.
 
 ---
 
