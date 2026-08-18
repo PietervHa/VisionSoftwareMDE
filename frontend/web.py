@@ -1,8 +1,6 @@
 import csv
-import hmac
 import io
 import json
-import os
 import secrets
 from datetime import date, datetime, timedelta
 import cv2
@@ -13,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from openpyxl import Workbook
 from pydantic import BaseModel
 from pathlib import Path
-from backend.core import db
+from backend.core import auth, db
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
 from QC_tools.capture_dataset import DatasetCapture
@@ -79,6 +77,7 @@ class ThresholdBody(BaseModel):
 
 class MaintenanceModeBody(BaseModel):
     maintenance_mode: bool = False
+    username: str = ""
     password: str = ""
 
 
@@ -195,9 +194,11 @@ def create_app(camera, app_state) -> FastAPI:
     @app.get("/status")
     def get_status(request: Request, response: Response):
         response.headers.update(_NO_STORE_HEADERS)
+        is_maintenance = _is_maintenance_access(request)
         return {
             "vision_mode": app_state.get_vision_mode(),
-            "maintenance_mode": _is_maintenance_access(request),
+            "maintenance_mode": is_maintenance,
+            "username": app_state.get_maintenance_session_user() if is_maintenance else None,
             "machine_id": cfg["machine_id"],
             "version": "1.0.0",
         }
@@ -218,16 +219,34 @@ def create_app(camera, app_state) -> FastAPI:
         return {"threshold": app_state.get_threshold()}
 
     @app.post("/maintenance_mode")
-    def set_maintenance_mode(body: MaintenanceModeBody, response: Response):
-        # Entering maintenance mode always requires the correct password.
+    def set_maintenance_mode(body: MaintenanceModeBody, request: Request, response: Response):
+        # Entering maintenance mode always requires a valid username+password
+        # against the `users` table. Every attempt, success or failure,
+        # including unknown usernames, is logged to login_log.
         if body.maintenance_mode:
-            expected_password = os.environ.get("MAINTENANCE_PASSWORD", "")
-            if not expected_password or not hmac.compare_digest(body.password, expected_password):
-                return JSONResponse(status_code=403, content={"error": "Incorrect password"})
+            username = body.username.strip()
+            client_ip = request.client.host if request.client else None
+
+            user = db.get_user(username) if username else None
+            if user:
+                password_ok = auth.verify_password(body.password, user["password_hash"])
+            else:
+                # Still run a scrypt hash against a dummy value so an
+                # unknown username takes the same time as a known one with
+                # a wrong password, otherwise timing would leak which
+                # usernames exist.
+                auth.verify_password(body.password, auth.DUMMY_PASSWORD_HASH)
+                password_ok = False
+
+            db.record_login(username or "(empty)", password_ok, client_ip)
+
+            if not password_ok:
+                return JSONResponse(status_code=403, content={"error": "Incorrect username or password"})
 
             session_token = secrets.token_urlsafe(24)
             app_state.set_maintenance_mode(True)
             app_state.set_maintenance_session_token(session_token)
+            app_state.set_maintenance_session_user(username)
             response.set_cookie(
                 "maintenance_session",
                 session_token,
@@ -236,12 +255,19 @@ def create_app(camera, app_state) -> FastAPI:
                 max_age=60 * 30,
                 path="/",
             )
-            return {"maintenance_mode": True}
+            return {"maintenance_mode": True, "username": username}
 
         app_state.set_maintenance_mode(False)
         app_state.set_maintenance_session_token("")
+        app_state.set_maintenance_session_user("")
         response.delete_cookie("maintenance_session", path="/")
         return {"maintenance_mode": False}
+
+    @app.get("/login_log")
+    def login_log(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        return {"logins": db.get_recent_logins(limit=20)}
 
     @app.post("/vision_mode")
     def set_vision_mode(body: VisionModeBody, request: Request):
