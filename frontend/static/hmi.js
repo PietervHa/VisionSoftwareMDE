@@ -1,4 +1,5 @@
 let CURRENT_MODE = "production";
+let CURRENT_USER = null;
 let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
 let LAST_APPLIED_MODE = null;
@@ -108,6 +109,7 @@ async function loadStatus() {
     const data = await res.json();
     VISION_MODE = data.vision_mode;
     CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
+    CURRENT_USER = data.maintenance_mode ? (data.username || null) : null;
     updateVisionModeButtons();
 }
 
@@ -319,6 +321,60 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
 });
 
 /* =========================
+   LOGIN LOG (maintenance mode only)
+========================= */
+function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str == null ? "" : String(str);
+    return div.innerHTML;
+}
+
+function formatLoginTimestamp(ts) {
+    if (!ts) return "-";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString();
+}
+
+function renderLoginLogRow(entry) {
+    const success = !!entry.success;
+    const cls = success ? "success" : "fail";
+    const statusText = success ? "OK" : "FAILED";
+    const user = escapeHtml(entry.username || "unknown");
+    const time = escapeHtml(formatLoginTimestamp(entry.timestamp));
+    return `<div class="login-log-row ${cls}">` +
+        `<span class="login-log-user">${user}</span>` +
+        `<span class="login-log-status">${statusText}</span>` +
+        `<span class="login-log-time">${time}</span>` +
+        `</div>`;
+}
+
+async function refreshLoginLog() {
+    const listEl = document.getElementById("loginLogList");
+    if (!listEl) return;
+    try {
+        const res = await fetch("/login_log", { credentials: "same-origin", cache: "no-store" });
+        if (!res.ok) {
+            listEl.textContent = "Unable to load login history.";
+            return;
+        }
+        const data = await res.json();
+        const entries = Array.isArray(data.logins) ? data.logins : [];
+        listEl.innerHTML = entries.length
+            ? entries.map(renderLoginLogRow).join("")
+            : "No login attempts recorded.";
+    } catch (e) {
+        console.error("Failed to load login log:", e);
+        listEl.textContent = "Unable to load login history.";
+    }
+}
+
+document.getElementById("refreshLoginLogBtn")?.addEventListener("click", () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    refreshLoginLog();
+});
+
+/* =========================
    MODE HANDLING
 ========================= */
 function applyMode() {
@@ -338,8 +394,10 @@ function applyMode() {
         rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
     }
 
+    const loginLogBox = document.getElementById("loginLogBox");
+
     if (CURRENT_MODE === "maintenance") {
-        banner.textContent = "MAINTENANCE MODE";
+        banner.textContent = CURRENT_USER ? `MAINTENANCE MODE — ${CURRENT_USER}` : "MAINTENANCE MODE";
         banner.className = "mode-overlay maintenance";
 
         input.disabled = false;
@@ -358,6 +416,11 @@ function applyMode() {
 
         if (cycleTimeSection) {
             cycleTimeSection.style.display = "block";
+        }
+
+        if (loginLogBox) {
+            loginLogBox.style.display = "block";
+            refreshLoginLog();
         }
 
         if (currentThreshold !== null) input.value = currentThreshold;
@@ -383,6 +446,10 @@ function applyMode() {
 
         if (cycleTimeSection) {
             cycleTimeSection.style.display = "none";
+        }
+
+        if (loginLogBox) {
+            loginLogBox.style.display = "none";
         }
 
         if (currentThreshold !== null) input.value = currentThreshold;
@@ -444,6 +511,7 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
         }
 
         CURRENT_MODE = "production";
+        CURRENT_USER = null;
         applyMode();
     }).catch((e) => {
         console.error("Failed to switch to production mode:", e);
@@ -452,22 +520,34 @@ document.getElementById("startProductionBtn").addEventListener("click", () => {
 });
 
 document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
-    const userPass = prompt("Enter password to enter maintenance mode:");
+    const username = prompt("Username:");
+    if (username === null) return; // prompt cancelled
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
+        alert("Username cannot be empty.");
+        return;
+    }
+
+    const userPass = prompt("Password:");
     if (userPass === null) return; // prompt cancelled
 
-    // The password is checked server-side; the client never sees the real value.
+    // Credentials are checked server-side; the client never sees the real value.
+    let loggedInUsername = trimmedUsername;
     try {
         const res = await fetch("/maintenance_mode", {
             method: "POST",
             credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ maintenance_mode: true, password: userPass })
+            body: JSON.stringify({ maintenance_mode: true, username: trimmedUsername, password: userPass })
         });
 
         if (!res.ok) {
-            alert("Incorrect password. Access denied.");
+            alert("Incorrect username or password. Access denied.");
             return;
         }
+
+        const data = await res.json();
+        loggedInUsername = data.username || trimmedUsername;
     } catch (e) {
         console.error("Failed to enter maintenance mode:", e);
         alert("Could not reach the server. Please try again.");
@@ -475,6 +555,7 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", async (
     }
 
     CURRENT_MODE = "maintenance";
+    CURRENT_USER = loggedInUsername;
     applyMode();
 });
 
