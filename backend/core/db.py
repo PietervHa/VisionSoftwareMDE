@@ -51,6 +51,7 @@ from sqlalchemy import (
     Text,
     and_,
     create_engine,
+    func,
     select,
 )
 from sqlalchemy.engine import Engine
@@ -309,6 +310,46 @@ def record_login(username: str, success: bool, ip_address: Optional[str] = None)
                 ip_address=ip_address,
             )
         )
+
+
+def get_recent_failures_since_last_success(username: str, limit: int) -> list[datetime]:
+    """
+    Failed-login timestamps for `username` since their last successful login
+    (or since the beginning of the log if they've never succeeded), newest
+    first, capped at `limit` rows. Used to derive lockout state on demand --
+    see auth.lockout_until(). Only ever called for usernames that exist, so
+    an unknown username can never accumulate a strike count here.
+    """
+    cols = login_log_table.c
+    with engine.connect() as conn:
+        last_success = conn.execute(
+            select(func.max(cols.timestamp)).where(
+                and_(cols.username == username, cols.success == 1)
+            )
+        ).scalar()
+
+        stmt = select(cols.timestamp).where(
+            and_(cols.username == username, cols.success == 0)
+        )
+        if last_success is not None:
+            stmt = stmt.where(cols.timestamp > last_success)
+        stmt = stmt.order_by(cols.timestamp.desc()).limit(limit)
+
+        rows = conn.execute(stmt).scalars().all()
+    return list(rows)
+
+
+def clear_login_log() -> int:
+    """
+    Delete every row from login_log. Returns the number of rows deleted.
+    Note: since lockout state is derived from this table (see
+    get_recent_failures_since_last_success), clearing it also lifts any
+    lockout currently in effect, that's a deliberate, expected side effect,
+    not a bug, and gives an operator a manual way to unlock an account.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(login_log_table.delete())
+    return result.rowcount
 
 
 def get_recent_logins(limit: int = 20) -> list[dict]:

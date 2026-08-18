@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from datetime import datetime, timedelta
+from typing import Optional, Sequence
 
 _ALGORITHM = "scrypt"
 _N = 2 ** 14  # CPU/memory cost factor
@@ -55,6 +57,47 @@ def verify_password(password: str, stored_hash: str) -> bool:
 # A hash of a password nobody will ever type, computed once at import time.
 # The login route runs verify_password() against this whenever the
 # submitted username doesn't exist, so an unknown-username attempt takes
-# the same amount of time as a wrong-password attempt for a real user --
+# the same amount of time as a wrong-password attempt for a real user,
 # otherwise response timing alone would leak which usernames are registered.
 DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
+
+
+# --- Login lockout -----------------------------------------------------------
+#
+# Deliberately not a mutable "locked" flag anywhere, lockout state is derived
+# on every request from the account's own failure history in login_log, so
+# there's nothing to get out of sync and nothing extra to migrate. Only counts
+# failures for usernames that exist: an unknown username can never lock a real
+# account out, by construction (see get_recent_failures_since_last_success()).
+
+MAX_FAILED_ATTEMPTS = 5      # consecutive failures (since the last success) that trigger a lockout
+FAILURE_WINDOW = timedelta(minutes=30)   # those failures must fall within this span of each other
+LOCKOUT_DURATION = timedelta(minutes=10)  # how long the account stays locked once triggered
+
+
+def lockout_until(recent_failure_timestamps: Sequence[datetime], now: Optional[datetime] = None) -> Optional[datetime]:
+    """
+    Given a user's failed-login timestamps since their last successful login
+    (newest first, at most MAX_FAILED_ATTEMPTS of them), return the datetime
+    the account is locked out until, or None if it isn't currently locked.
+
+    Locks only when MAX_FAILED_ATTEMPTS consecutive failures all fall within
+    FAILURE_WINDOW of each other, a handful of mistyped passwords spread
+    across a shift doesn't trigger it, a burst of guesses does. Each further
+    attempt made while locked extends the lock, since it becomes the new
+    "newest" failure.
+    """
+    if now is None:
+        now = datetime.now()
+    if len(recent_failure_timestamps) < MAX_FAILED_ATTEMPTS:
+        return None
+
+    newest = recent_failure_timestamps[0]
+    oldest_of_streak = recent_failure_timestamps[MAX_FAILED_ATTEMPTS - 1]
+    if newest - oldest_of_streak > FAILURE_WINDOW:
+        return None  # spread out over time, not a rapid-fire attempt
+
+    unlock_at = newest + LOCKOUT_DURATION
+    if now >= unlock_at:
+        return None
+    return unlock_at

@@ -373,6 +373,11 @@
 .modal-sub { color: #aaa; font-size: 14px; }
 
 /* Recent Logins panel (maintenance mode only) */
+.login-log-actions {
+    display: flex;
+    gap: 8px;
+}
+
 .login-log-refresh {
     padding: 6px 14px;
     font-size: 14px;
@@ -380,6 +385,15 @@
     color: #eee;
     border: 1px solid #555;
 }
+
+.login-log-clear {
+    padding: 6px 14px;
+    font-size: 14px;
+    background: #3a1f1f;
+    color: #ff8f8f;
+    border: 1px solid #6b3030;
+}
+.login-log-clear:hover { background: #4a2424; }
 
 .login-log-list {
     font-size: 14px;

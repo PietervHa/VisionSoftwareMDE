@@ -140,6 +140,12 @@ python -m QC_tools.manage_users logins [--limit N]
 
 Passwords are hashed with `hashlib.scrypt` (stdlib, no extra dependency) before being stored — see `backend/core/auth.py`. Every login attempt against `/maintenance_mode`, including unknown usernames and wrong passwords, is recorded to the `login_log` table with a timestamp and IP address; the HMI shows the most recent entries in the "Recent Logins" panel while in maintenance mode.
 
+**Unknown usernames** get a distinct message ("No account exists for that username.") rather than the generic wrong-password message. Note this is a deliberate trade-off: it makes typos obvious to a legitimate operator, at the cost of also confirming which usernames don't exist to anyone probing the login form. For an internal, LAN-only industrial HMI this is usually a reasonable trade; reconsider it if the app is ever exposed more broadly.
+
+**Login lockout**: 5 consecutive failed attempts against an existing username, all within a 15-minute span, lock that account out for 15 minutes (`MAX_FAILED_ATTEMPTS` / `FAILURE_WINDOW` / `LOCKOUT_DURATION` in `backend/core/auth.py` — change the constants there to tune it). Only usernames that exist can be locked — an unknown username is rejected before any lockout logic runs, so it can never count as a strike against someone else's account or lock out a real account by mistake. A successful login resets the streak. Continuing to try a locked account extends the lock. There's no separate "locked" flag anywhere — lockout state is always derived from `login_log` at request time, so it can't drift out of sync.
+
+The "Clear" button on the Recent Logins panel (or `DELETE /login_log`, maintenance-gated) wipes the whole log. Since lockout state is derived from that same table, clearing it also immediately lifts any lockout currently in effect — that's intentional, and doubles as a manual "unlock this account" action for an admin.
+
 Maintenance sessions are single-active: logging in from a second device silently takes over the session, same as before this change — there's still just one operator "in" maintenance mode at a time, it's now just tied to a specific username instead of a shared password.
 
 ---

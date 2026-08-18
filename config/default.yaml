@@ -17,7 +17,7 @@ roi:
 ocr:
   engine: "paddleocr"   # valid values: "tesseract" (default), "paddleocr"
   keywords:
-    - "www.theimagingsource.com"
+    - "Made in Germany"
   # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
   date_regex: '\b\d{2}/\d{2}/\d{4}\b'
   preprocess: "fast"  # valid values: "fast" (default), "accurate"

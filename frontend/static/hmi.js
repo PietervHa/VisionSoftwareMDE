@@ -374,6 +374,31 @@ document.getElementById("refreshLoginLogBtn")?.addEventListener("click", () => {
     refreshLoginLog();
 });
 
+document.getElementById("clearLoginLogBtn")?.addEventListener("click", async () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    const ok = confirm(
+        "Clear all recent login history? This also lifts any account lockout currently in effect. This cannot be undone."
+    );
+    if (!ok) return;
+
+    try {
+        const res = await fetch("/login_log", {
+            method: "DELETE",
+            credentials: "same-origin"
+        });
+        if (!res.ok) {
+            alert("Could not clear login history.");
+            return;
+        }
+    } catch (e) {
+        console.error("Failed to clear login log:", e);
+        alert("Could not reach the server. Please try again.");
+        return;
+    }
+
+    refreshLoginLog();
+});
+
 /* =========================
    MODE HANDLING
 ========================= */
@@ -542,7 +567,14 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", async (
         });
 
         if (!res.ok) {
-            alert("Incorrect username or password. Access denied.");
+            let message = "Incorrect username or password. Access denied.";
+            try {
+                const errBody = await res.json();
+                if (errBody && errBody.message) message = errBody.message;
+            } catch (e) {
+                // response body wasn't JSON; fall back to the generic message above
+            }
+            alert(message);
             return;
         }
 

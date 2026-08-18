@@ -221,27 +221,54 @@ def create_app(camera, app_state) -> FastAPI:
     @app.post("/maintenance_mode")
     def set_maintenance_mode(body: MaintenanceModeBody, request: Request, response: Response):
         # Entering maintenance mode always requires a valid username+password
-        # against the `users` table. Every attempt, success or failure,
-        # including unknown usernames, is logged to login_log.
+        # against the `users` table. Every attempt -- success or failure,
+        # including unknown usernames -- is logged to login_log. Unknown
+        # usernames are called out explicitly (rather than folded into a
+        # generic "incorrect" message) and, since there's no real account to
+        # attach a strike to, they can never trigger a lockout -- only a
+        # streak of failures against a username that actually exists can.
         if body.maintenance_mode:
             username = body.username.strip()
             client_ip = request.client.host if request.client else None
 
             user = db.get_user(username) if username else None
-            if user:
-                password_ok = auth.verify_password(body.password, user["password_hash"])
-            else:
-                # Still run a scrypt hash against a dummy value so an
-                # unknown username takes the same time as a known one with
-                # a wrong password, otherwise timing would leak which
-                # usernames exist.
+            if user is None:
+                # Still run a scrypt hash against a dummy value so an unknown
+                # username takes roughly as long as a known one with a wrong
+                # password -- a minor defense-in-depth measure even though
+                # the message below already tells the caller the account
+                # doesn't exist.
                 auth.verify_password(body.password, auth.DUMMY_PASSWORD_HASH)
-                password_ok = False
+                db.record_login(username or "(empty)", False, client_ip)
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "unknown_user", "message": "No account exists for that username."},
+                )
 
-            db.record_login(username or "(empty)", password_ok, client_ip)
+            recent_failures = db.get_recent_failures_since_last_success(username, limit=auth.MAX_FAILED_ATTEMPTS)
+            unlock_at = auth.lockout_until(recent_failures)
+            if unlock_at is not None:
+                # Locked: don't even check the password, and log this attempt
+                # as a failure too, so continuing to hammer a locked account
+                # extends the lock rather than doing nothing.
+                db.record_login(username, False, client_ip)
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "locked_out",
+                        "message": f"Account locked after repeated failed attempts. Try again after {unlock_at.strftime('%H:%M:%S')}.",
+                        "locked_until": unlock_at.isoformat(),
+                    },
+                )
+
+            password_ok = auth.verify_password(body.password, user["password_hash"])
+            db.record_login(username, password_ok, client_ip)
 
             if not password_ok:
-                return JSONResponse(status_code=403, content={"error": "Incorrect username or password"})
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "invalid_password", "message": "Incorrect password."},
+                )
 
             session_token = secrets.token_urlsafe(24)
             app_state.set_maintenance_mode(True)
@@ -262,6 +289,13 @@ def create_app(camera, app_state) -> FastAPI:
         app_state.set_maintenance_session_user("")
         response.delete_cookie("maintenance_session", path="/")
         return {"maintenance_mode": False}
+
+    @app.delete("/login_log")
+    def clear_login_log(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        deleted = db.clear_login_log()
+        return {"cleared": deleted}
 
     @app.get("/login_log")
     def login_log(request: Request):
