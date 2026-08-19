@@ -70,7 +70,7 @@ DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 # failures for usernames that exist: an unknown username can never lock a real
 # account out, by construction (see get_recent_failures_since_last_success()).
 
-MAX_FAILED_ATTEMPTS = 5      # consecutive failures (since the last success) that trigger a lockout
+MAX_FAILED_ATTEMPTS = 3      # consecutive failures (since the last success) that trigger a lockout
 FAILURE_WINDOW = timedelta(minutes=30)   # those failures must fall within this span of each other
 LOCKOUT_DURATION = timedelta(minutes=10)  # how long the account stays locked once triggered
 

@@ -1,82 +1,360 @@
-﻿body {
+/* =====================================================================
+   MDE AUTOMATION — Vision HMI
+   Design tokens derived from the MDE Automation mark: signal red EE1C25
+   on black and white. Red is reserved for one meaning throughout this
+   file: alarm, caution, or an unlocked/destructive action. It is never
+   used merely to mark "this is selected" — that's handled with an
+   inverted white/black fill instead, so red keeps its urgency.
+===================================================================== */
+
+:root {
+    --ink: #0a0a0a;
+    --panel: #161616;
+    --panel-raised: #1d1d1d;
+    --hairline: #2a2a2a;
+    --red: #ee1c25;
+    --green: #048f04;
+    --red-dim: #4a1113;
+    --white: #ffffff;
+    --steel: #8a8a8a;
+    --steel-dim: #5c5c5c;
+
+    --font-display: "Bahnschrift", "Arial Narrow", "Segoe UI", Arial, sans-serif;
+    --font-body: "Segoe UI", Arial, Helvetica, sans-serif;
+    --font-data: "Consolas", "Courier New", monospace;
+
+    --cut: 14px;   /* chamfer size for the signature cut-corner cards */
+    --cut-sm: 8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
     margin: 0;
-    background: #111;
-    color: #eee;
-    font-family: Arial, Helvetica, sans-serif;
+    background: var(--ink);
+    color: var(--white);
+    font-family: var(--font-body);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* =========================
+   HEADER
+========================= */
+.app-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 24px;
+    background: #000;
+    border-bottom: 4px solid var(--hairline);
+    position: relative;
+}
+
+/* the signature stripe: the logo's own black+red base, reused as a rule */
+.app-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -4px;
+    height: 4px;
+    background: linear-gradient(to right, var(--hairline) 0 60%, var(--red) 60% 100%);
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.brand img {
+    height: 40px;
+    width: 40px;
+    border-radius: 3px;
+    display: block;
+}
+
+.brand-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.15;
+}
+
+.brand-name {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 19px;
+    letter-spacing: 0.5px;
+}
+
+.brand-sub {
+    font-family: var(--font-body);
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--steel);
+    text-transform: uppercase;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.station-id {
+    font-family: var(--font-data);
+    font-size: 12px;
+    color: var(--steel);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+/* =========================
+   WORKSPACE (camera + panel)
+========================= */
+.workspace {
     display: grid;
     grid-template-columns: 3fr 2fr;
-    height: 100vh;
+    min-height: 0;
 }
 
 /* Camera */
 .camera {
     position: relative;
     display: flex;
-    justify-content: center;
-    align-items: center;
-    background: black;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    background: #000;
+    border-right: 1px solid var(--hairline);
+    min-height: 0;
 }
 
 .camera img {
-    max-width: 100%;
-    max-height: 100%;
+    flex: 1;
+    object-fit: contain;
+    width: 100%;
+    max-height: 78vh;
+    min-height: 0;
 }
 
-/* Mode overlay */
+/* Mode overlay badge on the feed */
 .mode-overlay {
     position: absolute;
-    top: 10px;
-    left: 10px;
-    padding: 8px 14px;
-    font-size: 16px;
-    font-weight: bold;
-    border-radius: 6px;
-    pointer-events: none;
+    top: 14px;
+    left: 14px;
+    padding: 8px 16px;
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    z-index: 2;
 }
 
 .mode-overlay.maintenance {
-    background: rgba(255, 204, 0, 0.85);
-    color: #222;
+    background: var(--red);
+    color: var(--white);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 
 .mode-overlay.production {
-    background: rgba(59, 91, 138, 0.9);
-    color: #fff;
+    background: rgba(10, 10, 10, 0.85);
+    color: var(--white);
+    border: 1px solid var(--hairline);
 }
 
-/* Panel */
-.panel {
-    padding: 20px;
+.below-feed {
+    background: #0d0d0d;
+    border-top: 1px solid var(--hairline);
+    padding: 10px 18px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 8px;
+}
+
+.vision-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--steel);
+}
+
+.mode-btn {
+    padding: 6px 16px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--panel);
+    color: var(--steel);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.mode-btn:hover { border-color: var(--steel); color: var(--white); }
+
+/* "selected" state uses inverted white fill, not red — red stays reserved
+   for alarm/caution only */
+.mode-btn.active {
+    background: var(--white);
+    color: #000;
+    border-color: var(--white);
+}
+
+.rotate-btn {
+    margin-left: 10px;
+    background: var(--panel);
+    border-color: var(--hairline);
+    font-family: var(--font-data);
+    font-size: 13px;
+}
+
+.rotate-btn:hover { background: var(--panel-raised); border-color: var(--steel); }
+
+.dynamic-label {
+    font-family: var(--font-data);
+    font-size: 15px;
+    color: var(--white);
+    min-height: 20px;
+}
+
+.cycle-time {
+    font-family: var(--font-data);
+    font-size: 12px;
+    color: var(--steel);
+    letter-spacing: 0.5px;
+}
+
+.ocr-keyword-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    color: var(--steel);
+}
+
+.ocr-keyword-row input {
+    font-family: var(--font-data);
+    font-size: 13px;
+    padding: 6px 10px;
+    background: var(--panel);
+    color: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    width: 240px;
+}
+
+.ocr-keyword-row button {
+    padding: 6px 14px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: var(--panel-raised);
+    color: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.ocr-keyword-row button:hover { border-color: var(--steel); }
+
+.dataset-capture-counter {
+    font-family: var(--font-data);
+    font-size: 13px;
+    color: var(--white);
+    margin-top: 4px;
+    padding: 6px 10px;
+    background: rgba(238, 28, 37, 0.12);
+    border: 1px solid var(--red-dim);
+    border-radius: 3px;
+    letter-spacing: 0.3px;
+}
+
+/* Camera disconnected overlay */
+.camera-disconnected-overlay {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 5;
+    pointer-events: none;
+}
+.camera-disconnected-overlay[hidden] { display: none; }
+
+.camera-disconnected-text {
+    padding: 14px 24px;
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--white);
+    background: var(--red);
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+}
+
+/* =========================
+   PANEL
+========================= */
+.panel {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+    min-height: 0;
 }
 
 .status {
-    font-size: 48px;
-    font-weight: bold;
-    padding: 20px;
+    font-family: var(--font-display);
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    padding: 22px;
     text-align: center;
-    border-radius: 10px;
+    clip-path: polygon(0 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% 100%, var(--cut) 100%, 0 calc(100% - var(--cut)));
 }
 
-.ok { background: #1e7f34; }
-.nok { background: #9b1c1c; }
+/* OK = green. NOK = brand red. See header note. */
+.ok { background: var(--green); color: var(--white); }
+.nok { background: var(--red); color: var(--white); }
 
 .info-box {
-    background: #1c1c1c;
-    border-radius: 10px;
-    padding: 15px;
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    clip-path: polygon(0 0, calc(100% - var(--cut-sm)) 0, 100% var(--cut-sm), 100% 100%, var(--cut-sm) 100%, 0 calc(100% - var(--cut-sm)));
+    padding: 16px 18px;
 }
 
 .info-box h2 {
-    margin-top: 0;
-    font-size: 20px;
-    color: #aaa;
+    margin: 0 0 10px 0;
+    font-family: var(--font-display);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--steel);
 }
 
 .detections {
-    font-size: 18px;
+    font-family: var(--font-data);
+    font-size: 16px;
+    color: var(--white);
+    line-height: 1.6;
 }
 
 .threshold-row {
@@ -86,291 +364,165 @@
 }
 
 .threshold-row input {
-    font-size: 18px;
+    font-family: var(--font-data);
+    font-size: 16px;
     width: 80px;
+    padding: 6px 8px;
+    background: var(--ink);
+    color: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
 }
 
 .threshold-row button {
-    padding: 8px 14px;
-    font-size: 16px;
-    background: #444;
-    color: #eee;
-    border: none;
-    border-radius: 6px;
+    padding: 9px 16px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: var(--panel-raised);
+    color: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+    cursor: pointer;
 }
+
+.threshold-row button:hover { border-color: var(--steel); }
 
 .button-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
+    margin-top: auto;
+    padding-top: 4px;
 }
 
 .btn {
-    padding: 10px 20px;
-    font-size: 18px;
-    border-radius: 8px;
-    border: none;
+    padding: 12px 22px;
+    font-family: var(--font-body);
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    border: 1px solid transparent;
     cursor: pointer;
+    transition: filter 0.15s, border-color 0.15s;
 }
+
+.btn:hover { filter: brightness(1.15); }
 
 .btn.reset {
-    background: #555;
-    color: #eee;
+    background: transparent;
+    color: var(--white);
+    border-color: var(--hairline);
 }
+.btn.reset:hover { border-color: var(--steel); }
 
-/* production button style */
+/* Production = the calm, locked-down state -> neutral, not red */
 .btn.production {
-    background: #3b5b8a;
-    color: #fff;
+    background: var(--white);
+    color: #000;
 }
 
-/* Maintenance button style */
+/* Maintenance = elevated access, handle with care -> red, matches the
+   maintenance mode banner */
 .btn.maintenance {
-    background: #f0c841; /* light yellow */
-    color: #222;
+    background: var(--red);
+    color: var(--white);
 }
 
 .btn:disabled {
-    opacity: 0.5;
+    opacity: 0.35;
     cursor: not-allowed;
+    filter: none;
 }
 
 .footer {
-    margin-top: auto;
-    font-size: 14px;
-    color: #777;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--hairline);
+    font-family: var(--font-data);
+    font-size: 12px;
+    color: var(--steel-dim);
     text-align: center;
-}
-
-.below-feed {
-    background: #1a1a1a;
-    border-top: 1px solid #333;
-    padding: 10px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.vision-toggle {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 15px;
-    color: #aaa;
-}
-
-.mode-btn {
-    padding: 5px 14px;
-    font-size: 14px;
-    background: #333;
-    color: #bbb;
-    border: 1px solid #555;
-    border-radius: 5px;
-    cursor: pointer;
-}
-
-.mode-btn.active {
-    background: #3b5b8a;
-    color: #fff;
-    border-color: #3b5b8a;
-}
-
-.dynamic-label {
-    font-size: 17px;
-    color: #ddd;
-    min-height: 22px;
-}
-
-.cycle-time {
-    font-size: 14px;
-    color: #888;
-}
-
-.camera {
-    flex-direction: column;   /* Change existing rule: add this to stack img and below-feed */
-    justify-content: flex-start;
-    align-items: stretch;
-}
-
-/* override: keep img centered and filling the camera area */
-.camera img {
-    flex: 1;
-    object-fit: contain;
-    width: 100%;
-}
-
-/* Slightly reduce live-feed height so the full HMI fits without page scrolling. */
-.camera img {
-    max-height: 80vh;
-    min-height: 0;
-}
-
-.ocr-keyword-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 14px;
-    color: #aaa;
-}
-
-.ocr-keyword-row input {
-    font-size: 14px;
-    padding: 4px 8px;
-    background: #2a2a2a;
-    color: #eee;
-    border: 1px solid #555;
-    border-radius: 5px;
-    width: 240px;
-}
-
-.ocr-keyword-row button {
-    padding: 5px 12px;
-    font-size: 13px;
-    background: #444;
-    color: #eee;
-    border: 1px solid #555;
-    border-radius: 5px;
-    cursor: pointer;
-}
-
-.rotate-btn {
-    margin-left: 12px;
-    background: #2a2a2a;
-    border-color: #666;
-    font-size: 15px;
     letter-spacing: 0.5px;
 }
 
-.rotate-btn:hover {
-    background: #3a3a3a;
-    border-color: #999;
-}
-
-
-/* Dataset capture buttons: match .btn base styling but with distinct colors */
-#captureOkBtn {
-    /* same visual style as .btn.production (blue) per request */
-    background: #3b5b8a;
-    color: #fff;
-}
-
-#captureDefBtn {
-    /* same visual style as .btn.maintenance (yellow/orange) per request */
-    background: #f0c841;
-    color: #222;
-}
-
-.dataset-capture-counter {
-    font-size: 14px;
-    color: #4ade80;
-    margin-top: 6px;
-    padding: 6px 8px;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 4px;
-    font-weight: 500;
-    letter-spacing: 0.3px;
-}
-
+/* Dataset capture */
 .dataset-capture-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
-.dataset-capture-header h2 {
-    margin: 0;
-    font-size: 20px;
-    color: #aaa;
-}
+.dataset-capture-header h2 { margin: 0; }
 
 .dataset-capture-header .btn {
     padding: 8px 16px;
-    font-size: 16px;
+    font-size: 12px;
 }
 
 .dataset-capture-instructions {
-    margin-top: 10px;
+    margin-top: 8px;
     padding: 10px 12px;
-    border-radius: 8px;
-    background: #262626;
-    border: 1px solid #444;
-    color: #ddd;
-    font-size: 14px;
+    border-radius: 3px;
+    background: var(--ink);
+    border: 1px solid var(--hairline);
+    color: var(--steel);
+    font-family: var(--font-body);
+    font-size: 13px;
     line-height: 1.4;
 }
 
 #captureToggleBtn {
-    background: #3b5b8a;
-    color: #fff;
+    background: transparent;
+    color: var(--white);
+    border: 1px solid var(--hairline);
 }
 
 #captureToggleBtn.capture-active {
-    background: #9b1c1c;
-    color: #fff;
+    background: var(--red);
+    color: var(--white);
+    border-color: var(--red);
 }
 
 #captureToggleBtn:disabled {
-    opacity: 0.5;
+    opacity: 0.35;
     cursor: not-allowed;
 }
 
-#captureOkBtn {
-    background: #1e7f34;
-    color: #fff;
-}
-
-#captureDefBtn {
-    background: #9b1c1c;
-    color: #fff;
-}
-
-/* Camera disconnected overlay: shown over the live feed while the backend
-   is retrying the connection after an established camera dropped out. */
-.camera-disconnected-overlay {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    z-index: 5;
-    pointer-events: none;
-}
-.camera-disconnected-overlay[hidden] { display: none; }
-
-.camera-disconnected-text {
-    padding: 14px 22px;
-    font-size: 18px;
-    font-weight: bold;
-    color: #fff;
-    background: rgba(155, 28, 28, 0.9);
-    border-radius: 8px;
-}
-
-/* Missing camera modal: shown when no camera has been seen at all since
-   the page loaded (i.e. it was missing from the start). */
+/* Missing camera modal */
 .modal-overlay {
     display: flex;
     justify-content: center;
     align-items: center;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: rgba(0, 0, 0, 0.85);
     z-index: 100;
 }
 .modal-overlay[hidden] { display: none; }
 
 .modal-box {
-    background: #1c1c1c;
-    border: 1px solid #9b1c1c;
-    border-radius: 10px;
-    padding: 30px 40px;
+    background: var(--panel);
+    border: 1px solid var(--red-dim);
+    clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    padding: 32px 42px;
     text-align: center;
     max-width: 420px;
 }
-.modal-box h2 { margin-top: 0; color: #ff5c5c; }
-.modal-sub { color: #aaa; font-size: 14px; }
+.modal-box h2 {
+    margin-top: 0;
+    font-family: var(--font-display);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--red);
+}
+.modal-sub { color: var(--steel); font-size: 14px; }
 
 /* Recent Logins panel (maintenance mode only) */
 .login-log-actions {
@@ -379,24 +531,26 @@
 }
 
 .login-log-refresh {
-    padding: 6px 14px;
-    font-size: 14px;
-    background: #444;
-    color: #eee;
-    border: 1px solid #555;
+    padding: 7px 14px;
+    font-size: 12px;
+    background: var(--panel-raised);
+    color: var(--white);
+    border: 1px solid var(--hairline);
 }
+.login-log-refresh:hover { border-color: var(--steel); }
 
 .login-log-clear {
-    padding: 6px 14px;
-    font-size: 14px;
-    background: #3a1f1f;
-    color: #ff8f8f;
-    border: 1px solid #6b3030;
+    padding: 7px 14px;
+    font-size: 12px;
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red-dim);
 }
-.login-log-clear:hover { background: #4a2424; }
+.login-log-clear:hover { background: var(--red-dim); }
 
 .login-log-list {
-    font-size: 14px;
+    font-family: var(--font-data);
+    font-size: 13px;
     max-height: 160px;
     overflow-y: auto;
     display: flex;
@@ -409,30 +563,50 @@
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    padding: 5px 8px;
-    border-radius: 4px;
+    padding: 6px 10px;
+    border-radius: 3px;
     background: rgba(255, 255, 255, 0.03);
+    border-left: 2px solid transparent;
 }
 
 .login-log-user {
-    color: #ddd;
+    color: var(--white);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .login-log-status {
-    font-weight: bold;
-    font-size: 12px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.5px;
 }
 
 .login-log-time {
-    color: #888;
-    font-size: 12px;
+    color: var(--steel);
+    font-size: 11px;
     white-space: nowrap;
 }
 
-.login-log-row.success .login-log-status { color: #4ade80; }
-.login-log-row.fail .login-log-status { color: #ff6b6b; }
+.login-log-row.success { border-left-color: var(--white); }
+.login-log-row.success .login-log-status { color: var(--white); }
+.login-log-row.fail { border-left-color: var(--red); }
+.login-log-row.fail .login-log-status { color: var(--red); }
 
+/* =========================
+   RESPONSIVE
+========================= */
+@media (max-width: 900px) {
+    .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto;
+        overflow-y: auto;
+    }
+    .camera { border-right: none; border-bottom: 1px solid var(--hairline); }
+    .camera img { max-height: 50vh; }
+}
 
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+}

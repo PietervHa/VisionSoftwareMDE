@@ -111,6 +111,11 @@ async function loadStatus() {
     CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
     CURRENT_USER = data.maintenance_mode ? (data.username || null) : null;
     updateVisionModeButtons();
+
+    const machineIdLabel = document.getElementById("machineIdLabel");
+    if (machineIdLabel && data.machine_id) {
+        machineIdLabel.textContent = data.machine_id;
+    }
 }
 
 function getPollingIntervalMs() {
