@@ -495,7 +495,8 @@ body {
     cursor: not-allowed;
 }
 
-/* Missing camera modal */
+/* Generic modal shell — used by the missing-camera alert, confirm
+   dialogs, and the login form (see dialogs.js) */
 .modal-overlay {
     display: flex;
     justify-content: center;
@@ -509,20 +510,147 @@ body {
 
 .modal-box {
     background: var(--panel);
-    border: 1px solid var(--red-dim);
+    border: 1px solid var(--hairline);
     clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
-    padding: 32px 42px;
+    padding: 28px 36px;
     text-align: center;
     max-width: 420px;
 }
+
+/* destructive = alarm-toned (missing camera, "this can't be undone"
+   confirms). neutral = calm actions like logging in or starting
+   production — no reason to make those look like a warning. */
+.modal-box.destructive { border-color: var(--red-dim); }
+.modal-box.neutral { border-color: var(--hairline); }
+
 .modal-box h2 {
     margin-top: 0;
     font-family: var(--font-display);
     letter-spacing: 1px;
     text-transform: uppercase;
-    color: var(--red);
+    color: var(--white);
 }
+.modal-box.destructive h2 { color: var(--red); }
+
 .modal-sub { color: var(--steel); font-size: 14px; }
+
+.modal-message {
+    color: var(--steel);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: left;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 22px;
+}
+
+.modal-actions .btn { padding: 10px 20px; font-size: 13px; }
+
+/* Login form (inside a .modal-box.login-box) */
+.login-box { text-align: left; max-width: 380px; }
+.login-box h2 { text-align: center; margin-bottom: 18px; }
+
+.login-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+}
+
+.login-field label {
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--steel);
+}
+
+.login-field input {
+    font-family: var(--font-data);
+    font-size: 15px;
+    padding: 10px 12px;
+    background: var(--ink);
+    color: var(--white);
+    border: 1px solid var(--hairline);
+    border-radius: 3px;
+}
+.login-field input:focus {
+    outline: none;
+    border-color: var(--steel);
+}
+
+.login-error {
+    background: rgba(238, 28, 37, 0.12);
+    border: 1px solid var(--red-dim);
+    color: var(--white);
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.4;
+    padding: 10px 12px;
+    border-radius: 3px;
+    margin-bottom: 14px;
+}
+.login-error[hidden] { display: none; }
+
+/* =========================
+   TOASTS
+========================= */
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 380px;
+}
+
+.toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: var(--panel-raised);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--steel);
+    clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+    padding: 12px 14px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+.toast.toast-show { opacity: 1; transform: translateY(0); }
+
+.toast.error { border-left-color: var(--red); }
+.toast.success { border-left-color: var(--white); }
+.toast.info { border-left-color: var(--steel); }
+
+.toast-message {
+    flex: 1;
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--white);
+}
+
+.toast-close {
+    background: transparent;
+    border: none;
+    color: var(--steel);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+}
+.toast-close:hover { color: var(--white); }
 
 /* Recent Logins panel (maintenance mode only) */
 .login-log-actions {
