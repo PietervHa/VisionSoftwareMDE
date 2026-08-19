@@ -111,6 +111,11 @@ async function loadStatus() {
     CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
     CURRENT_USER = data.maintenance_mode ? (data.username || null) : null;
     updateVisionModeButtons();
+
+    const machineIdLabel = document.getElementById("machineIdLabel");
+    if (machineIdLabel && data.machine_id) {
+        machineIdLabel.textContent = data.machine_id;
+    }
 }
 
 function getPollingIntervalMs() {
@@ -296,7 +301,7 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     const value = parseFloat(document.getElementById("thresholdInput").value);
 
     if (isNaN(value) || value < 0 || value > 1) {
-        alert("Threshold must be between 0.0 and 1.0");
+        showToast("Threshold must be between 0.0 and 1.0", { type: "error" });
         return;
     }
 
@@ -309,25 +314,21 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
         });
 
         if (!res.ok) {
-            alert("Failed to apply threshold: not in maintenance mode (session may have expired). Reload the page and try again.");
+            showToast("Failed to apply threshold: not in maintenance mode (session may have expired). Reload the page and try again.", { type: "error" });
             return;
         }
 
         currentThreshold = value; // freeze this value for production
     } catch (e) {
         console.error("Failed to set threshold:", e);
-        alert("Failed to apply threshold: network error. Check the connection and try again.");
+        showToast("Failed to apply threshold: network error. Check the connection and try again.", { type: "error" });
     }
 });
 
 /* =========================
    LOGIN LOG (maintenance mode only)
 ========================= */
-function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str == null ? "" : String(str);
-    return div.innerHTML;
-}
+/* escapeHtml() is defined in dialogs.js, loaded before this file */
 
 function formatLoginTimestamp(ts) {
     if (!ts) return "-";
@@ -376,10 +377,13 @@ document.getElementById("refreshLoginLogBtn")?.addEventListener("click", () => {
 
 document.getElementById("clearLoginLogBtn")?.addEventListener("click", async () => {
     if (CURRENT_MODE !== "maintenance") return;
-    const ok = confirm(
-        "Clear all recent login history? This also lifts any account lockout currently in effect. This cannot be undone."
-    );
-    if (!ok) return;
+    const confirmed = await showConfirmDialog({
+        title: "Clear Login History",
+        message: "This also lifts any account lockout currently in effect. This cannot be undone.",
+        confirmLabel: "Clear",
+        destructive: true
+    });
+    if (!confirmed) return;
 
     try {
         const res = await fetch("/login_log", {
@@ -387,12 +391,12 @@ document.getElementById("clearLoginLogBtn")?.addEventListener("click", async () 
             credentials: "same-origin"
         });
         if (!res.ok) {
-            alert("Could not clear login history.");
+            showToast("Could not clear login history.", { type: "error" });
             return;
         }
     } catch (e) {
         console.error("Failed to clear login log:", e);
-        alert("Could not reach the server. Please try again.");
+        showToast("Could not reach the server. Please try again.", { type: "error" });
         return;
     }
 
@@ -521,73 +525,70 @@ async function applyVisionMode(mode) {
 /* =========================
    BUTTON EVENTS
 ========================= */
-document.getElementById("startProductionBtn").addEventListener("click", () => {
-    if (!confirm("Start production mode?\n\nConfidence threshold will be locked.")) return;
+document.getElementById("startProductionBtn").addEventListener("click", async () => {
+    const confirmed = await showConfirmDialog({
+        title: "Start Production Mode",
+        message: "The confidence threshold will be locked until maintenance mode is entered again.",
+        confirmLabel: "Start Production",
+        destructive: false
+    });
+    if (!confirmed) return;
 
-    fetch("/maintenance_mode", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maintenance_mode: false })
-    }).then((res) => {
+    try {
+        const res = await fetch("/maintenance_mode", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maintenance_mode: false })
+        });
+
         if (!res.ok) {
-            alert("Could not switch to production mode.");
+            showToast("Could not switch to production mode.", { type: "error" });
             return;
         }
 
         CURRENT_MODE = "production";
         CURRENT_USER = null;
         applyMode();
-    }).catch((e) => {
+    } catch (e) {
         console.error("Failed to switch to production mode:", e);
-        alert("Could not reach the server. Please try again.");
-    });
+        showToast("Could not reach the server. Please try again.", { type: "error" });
+    }
 });
 
 document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
-    const username = prompt("Username:");
-    if (username === null) return; // prompt cancelled
-    const trimmedUsername = username.trim();
-    if (!trimmedUsername) {
-        alert("Username cannot be empty.");
-        return;
-    }
+    const loggedIn = await showLoginDialog(async (username, password) => {
+        try {
+            const res = await fetch("/maintenance_mode", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ maintenance_mode: true, username, password })
+            });
 
-    const userPass = prompt("Password:");
-    if (userPass === null) return; // prompt cancelled
-
-    // Credentials are checked server-side; the client never sees the real value.
-    let loggedInUsername = trimmedUsername;
-    try {
-        const res = await fetch("/maintenance_mode", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ maintenance_mode: true, username: trimmedUsername, password: userPass })
-        });
-
-        if (!res.ok) {
-            let message = "Incorrect username or password. Access denied.";
-            try {
-                const errBody = await res.json();
-                if (errBody && errBody.message) message = errBody.message;
-            } catch (e) {
-                // response body wasn't JSON; fall back to the generic message above
+            if (!res.ok) {
+                let message = "Incorrect username or password. Access denied.";
+                try {
+                    const errBody = await res.json();
+                    if (errBody && errBody.message) message = errBody.message;
+                } catch (e) {
+                    // response body wasn't JSON; fall back to the generic message above
+                }
+                return { ok: false, message };
             }
-            alert(message);
-            return;
-        }
 
-        const data = await res.json();
-        loggedInUsername = data.username || trimmedUsername;
-    } catch (e) {
-        console.error("Failed to enter maintenance mode:", e);
-        alert("Could not reach the server. Please try again.");
-        return;
-    }
+            const data = await res.json();
+            CURRENT_USER = data.username || username;
+            return { ok: true };
+        } catch (e) {
+            console.error("Failed to enter maintenance mode:", e);
+            return { ok: false, message: "Could not reach the server. Please try again." };
+        }
+    });
+
+    if (!loggedIn) return;
 
     CURRENT_MODE = "maintenance";
-    CURRENT_USER = loggedInUsername;
     applyMode();
 });
 
@@ -614,7 +615,7 @@ document.getElementById("rotateCameraBtn").addEventListener("click", async () =>
 document.getElementById("applyOcrKeyword").addEventListener("click", async () => {
     if (CURRENT_MODE !== "maintenance") return;
     const value = document.getElementById("ocrKeywordInput").value.trim();
-    if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
+    if (!value) { showToast("Search keyword cannot be empty.", { type: "error" }); return; }
     await fetch("/ocr_keyword", {
         method: "POST",
         credentials: "same-origin",
@@ -625,10 +626,16 @@ document.getElementById("applyOcrKeyword").addEventListener("click", async () =>
 
 document.getElementById("resetBtn").addEventListener("click", async () => {
     if (CURRENT_MODE !== "maintenance") return;
-    if (!confirm("Are you sure you want to reset the counters?")) return;
+    const confirmed = await showConfirmDialog({
+        title: "Reset Counters",
+        message: "This will reset the OK, NOK, and Total counters to zero. This cannot be undone.",
+        confirmLabel: "Reset",
+        destructive: true
+    });
+    if (!confirmed) return;
     const res = await fetch("/reset_counters", { method: "POST", credentials: "same-origin" });
     if (!res.ok) {
-        alert("Reset failed: not in maintenance mode (session may have expired). Reload the page and try again.");
+        showToast("Reset failed: not in maintenance mode (session may have expired). Reload the page and try again.", { type: "error" });
     }
 });
 

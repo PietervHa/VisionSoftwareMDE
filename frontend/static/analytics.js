@@ -63,12 +63,12 @@
                         {
                             label: "OK",
                             data: okData,
-                            backgroundColor: "#1e7f34",
+                            backgroundColor: "#2e8b57",
                         },
                         {
                             label: "NOK",
                             data: nokData,
-                            backgroundColor: "#9b1c1c",
+                            backgroundColor: "#ee1c25",
                         },
                     ],
                 },
@@ -78,13 +78,13 @@
                     plugins: {
                         legend: {
                             labels: {
-                                color: "#eee",
+                                color: "#ffffff",
                             },
                         },
                         title: {
                             display: true,
                             text: "Inspections per Hour",
-                            color: "#eee",
+                            color: "#ffffff",
                             font: {
                                 size: 18,
                             },
@@ -94,7 +94,7 @@
                         x: {
                             stacked: false,
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -102,14 +102,14 @@
                             title: {
                                 display: true,
                                 text: "Hour",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                         y: {
                             beginAtZero: true,
                             ticks: {
                                 precision: 0,
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -117,7 +117,7 @@
                             title: {
                                 display: true,
                                 text: "Count",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                     },
@@ -229,16 +229,16 @@
                         {
                             label: "OK per Hour",
                             data: okPerHour,
-                            borderColor: "green",
-                            backgroundColor: "rgba(0,200,0,0.1)",
+                            borderColor: "#2e8b57",
+                            backgroundColor: "rgba(46,139,87,0.15)",
                             fill: true,
                             tension: 0.3
                         },
                         {
                             label: "NOK per Hour",
                             data: nokPerHour,
-                            borderColor: "red",
-                            backgroundColor: "rgba(255,0,0,0.1)",
+                            borderColor: "#ee1c25",
+                            backgroundColor: "rgba(238,28,37,0.15)",
                             fill: true,
                             tension: 0.3
                         }
@@ -247,8 +247,8 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#eee" } },
-                    scales: { y: { beginAtZero: true, ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } } }
+                    plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#ffffff" } },
+                    scales: { y: { beginAtZero: true, ticks: { color: "#8a8a8a" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#8a8a8a" }, grid: { color: "rgba(255,255,255,0.08)" } } }
                 }
             });
         }
@@ -273,8 +273,8 @@
                         {
                             label: "NOK per Hour",
                             data: nokPerHour,
-                            borderColor: "#9b1c1c",
-                            backgroundColor: "rgba(155,28,28,0.2)",
+                            borderColor: "#ee1c25",
+                            backgroundColor: "rgba(238,28,37,0.18)",
                             fill: true,
                             tension: 0.3
                         }
@@ -286,13 +286,13 @@
                     plugins: {
                         legend: {
                             labels: {
-                                color: "#eee",
+                                color: "#ffffff",
                             },
                         },
                         title: {
                             display: true,
                             text: "NOK Count per Hour",
-                            color: "#eee",
+                            color: "#ffffff",
                             font: {
                                 size: 18,
                             },
@@ -302,7 +302,7 @@
                         y: {
                             beginAtZero: true,
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -310,7 +310,7 @@
                         },
                         x: {
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -345,8 +345,8 @@
                         {
                             label: "Avg (ms)",
                             data: avgData,
-                            borderColor: "rgb(100, 160, 255)",
-                            backgroundColor: "rgba(100, 160, 255, 0.1)",
+                            borderColor: "rgba(255, 255, 255, 0.85)",
+                            backgroundColor: "rgba(255, 255, 255, 0.08)",
                             fill: false,
                             tension: 0.3,
                             borderWidth: 2
@@ -354,7 +354,7 @@
                         {
                             label: "Min (ms)",
                             data: minData,
-                            borderColor: "rgba(0, 200, 100, 0.7)",
+                            borderColor: "rgba(46, 139, 87, 0.8)",
                             backgroundColor: "transparent",
                             fill: false,
                             tension: 0.3,
@@ -364,7 +364,7 @@
                         {
                             label: "Max (ms)",
                             data: maxData,
-                            borderColor: "rgba(255, 100, 100, 0.7)",
+                            borderColor: "rgba(238, 28, 37, 0.75)",
                             backgroundColor: "transparent",
                             fill: false,
                             tension: 0.3,
@@ -379,13 +379,13 @@
                     plugins: {
                         legend: {
                             labels: {
-                                color: "#eee",
+                                color: "#ffffff",
                             },
                         },
                         title: {
                             display: true,
                             text: "Processing Speed (15-min intervals)",
-                            color: "#eee",
+                            color: "#ffffff",
                             font: {
                                 size: 18,
                             },
@@ -395,7 +395,7 @@
                         y: {
                             beginAtZero: true,
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -403,12 +403,12 @@
                             title: {
                                 display: true,
                                 text: "ms",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                         x: {
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -416,7 +416,7 @@
                             title: {
                                 display: true,
                                 text: "Time",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                     },
