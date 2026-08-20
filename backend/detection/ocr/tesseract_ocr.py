@@ -125,9 +125,15 @@ class TesseractOCR:
 
         return apply_roi(frame, roi)
 
-    def run(self, frame, profile=False):
+    def _recognize(self, frame, profile=False):
         """
-        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+        Shared pipeline: ROI, grayscale, downscale, preprocess, and the
+        actual Tesseract inference call.
+
+        Returns every recognized token (unfiltered) plus timing info. Both
+        `run()` (keyword match, for the OCR mode) and `read()` (raw
+        read-out, for the OCRead mode) build on this so the ROI/
+        preprocessing/inference path is identical between the two modes.
         """
         profile_data = {} if profile else None
 
@@ -147,12 +153,6 @@ class TesseractOCR:
             gray = roi_frame
         if profile_data is not None:
             profile_data["grayscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
-
-        keywords = (
-            [self.app_state.get_ocr_keyword()]
-            if self.app_state else self.keywords
-        )
-        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
 
         t2 = time.perf_counter()
         gray = self._downscale_roi(gray)
@@ -178,13 +178,11 @@ class TesseractOCR:
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        detections = []
         texts = data.get("text", [])
         confs = data.get("conf", [])
 
         # --- Collect valid tokens (confidence >= 0, non-empty) ---
         valid_tokens = []
-        t5 = time.perf_counter()
         for i, text in enumerate(texts):
             if not text.strip():
                 continue
@@ -195,6 +193,27 @@ class TesseractOCR:
             if conf < 0:
                 continue
             valid_tokens.append((text, conf))
+
+        return valid_tokens, elapsed_ms, profile_data
+
+    def run(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+
+        Used by the OCR mode: recognized text is matched against the
+        configured/active keyword (and date pattern) here, and only matching
+        candidates are returned as detections.
+        """
+        valid_tokens, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+
+        keywords = (
+            [self.app_state.get_ocr_keyword()]
+            if self.app_state else self.keywords
+        )
+        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
+
+        t5 = time.perf_counter()
+        detections = []
 
         # Build the full recognised line for phrase-level matching.
         # Tesseract image_to_data returns one token per call, so a multi-word
@@ -246,6 +265,41 @@ class TesseractOCR:
             "processing_time_ms": processing_time_ms,
             "mode": "ocr",
             "searched_word": keywords[0] if keywords else ""
+        }
+
+        if profile_data is not None:
+            result["_profile_ms"] = profile_data
+
+        return result
+
+    def read(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame and returns every recognized
+        token as-is, with no keyword/date matching.
+
+        Used by the OCRead mode: the comparison against the expected text is
+        made on the PLC, not here, so nothing is filtered out or judged
+        OK/NOK - the raw read-out is simply reported back.
+        """
+        valid_tokens, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+
+        t5 = time.perf_counter()
+        detections = [
+            {"text": text, "confidence": round(conf / 100, 3)}
+            for text, conf in valid_tokens
+        ]
+        full_text = " ".join(t for t, _ in valid_tokens).strip()
+        if profile_data is not None:
+            profile_data["filter_ms"] = round((time.perf_counter() - t5) * 1000, 3)
+            profile_data["total_ms"] = round(sum(profile_data.values()), 3)
+
+        processing_time_ms = round(elapsed_ms, 1)
+        log.debug("OCR read completed: processing_time_ms=%s text=%r", processing_time_ms, full_text)
+        result = {
+            "detections": detections,
+            "text": full_text,
+            "processing_time_ms": processing_time_ms,
+            "mode": "ocread",
         }
 
         if profile_data is not None:

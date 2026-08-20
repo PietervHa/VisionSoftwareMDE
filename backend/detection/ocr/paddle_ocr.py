@@ -26,7 +26,11 @@ class PaddleOCR:
     def __init__(self, app_state=None):
         self.app_state = app_state
         ocr_cfg = cfg["ocr"]
-        self._paddle = PaddleOCRWorker(lang="en", cpu_threads=int(ocr_cfg.get("cpu_threads", 4)))
+        self._paddle = PaddleOCRWorker(
+            lang="en",
+            cpu_threads=int(ocr_cfg.get("cpu_threads", 4)),
+            use_angle_cls=bool(ocr_cfg.get("use_angle_cls", True)),
+        )
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.keyword_set = set(self.keywords)
         self.date_regex = ocr_cfg["date_regex"]
@@ -104,9 +108,14 @@ class PaddleOCR:
 
         return apply_roi(frame, roi)
 
-    def run(self, frame, profile=False):
+    def _recognize(self, frame, profile=False):
         """
-        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+        Shared pipeline: ROI, downscale, and the actual PaddleOCR inference call.
+
+        Returns every text candidate PaddleOCR produced (unfiltered), along
+        with timing info. Both `run()` (keyword match, for the OCR mode) and
+        `read()` (raw read-out, for the OCRead mode) build on this so the
+        ROI/preprocessing/inference path is identical between the two modes.
         """
         profile_data = {} if profile else None
 
@@ -124,15 +133,6 @@ class PaddleOCR:
         if debug_enabled:
             log.debug("PaddleOCR input: shape=%s dtype=%s", roi_frame.shape, roi_frame.dtype)
 
-        keywords = (
-            [self.app_state.get_ocr_keyword()]
-            if self.app_state else self.keywords
-        )
-        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
-
-        if debug_enabled:
-            log.debug("PaddleOCR run: searching for keywords=%s", keywords)
-
         start_time = time.perf_counter()
 
         t2 = start_time
@@ -149,16 +149,12 @@ class PaddleOCR:
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        detections = []
-        total_candidates = 0
-
-        t3 = time.perf_counter()
+        candidates = []
         if results:
             for page_results in results:
                 if not page_results:
                     continue
                 for item in page_results:
-                    total_candidates += 1
                     if not isinstance(item, (list, tuple)) or len(item) < 2:
                         continue
                     rec = item[1]
@@ -168,14 +164,35 @@ class PaddleOCR:
                     score = rec[1]
                     if not text.strip():
                         continue
-                    word = text.lower()
-                    if keyword_set and word not in keyword_set:
-                        if self._date_pattern and not self._date_pattern.search(text):
-                            continue
-                    detections.append({
-                        "text": text,
-                        "confidence": round(float(score), 3)
-                    })
+                    candidates.append({"text": text, "confidence": round(float(score), 3)})
+
+        return candidates, elapsed_ms, profile_data
+
+    def run(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame, applying ROI and preprocessing if configured.
+
+        Used by the OCR mode: recognized text is matched against the
+        configured/active keyword (and date pattern) here, and only matching
+        candidates are returned as detections.
+        """
+        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+
+        keywords = (
+            [self.app_state.get_ocr_keyword()]
+            if self.app_state else self.keywords
+        )
+        keyword_set = {k.lower() for k in keywords if isinstance(k, str)} if self.app_state else self.keyword_set
+
+        t3 = time.perf_counter()
+        detections = []
+        for candidate in candidates:
+            text = candidate["text"]
+            word = text.lower()
+            if keyword_set and word not in keyword_set:
+                if self._date_pattern and not self._date_pattern.search(text):
+                    continue
+            detections.append(candidate)
 
         if profile_data is not None:
             profile_data["filter_ms"] = round((time.perf_counter() - t3) * 1000, 3)
@@ -186,7 +203,7 @@ class PaddleOCR:
         log.debug(
             "PaddleOCR run completed: processing_time_ms=%s candidates=%s detections=%s searched_word=%r",
             processing_time_ms,
-            total_candidates,
+            len(candidates),
             len(detections),
             searched_word,
         )
@@ -195,6 +212,37 @@ class PaddleOCR:
             "processing_time_ms": processing_time_ms,
             "mode": "ocr",
             "searched_word": searched_word
+        }
+
+        if profile_data is not None:
+            result["_profile_ms"] = profile_data
+
+        return result
+
+    def read(self, frame, profile=False):
+        """
+        Executes OCR on the provided frame and returns every recognized piece
+        of text as-is, with no keyword/date matching.
+
+        Used by the OCRead mode: the comparison against the expected text is
+        made on the PLC, not here, so nothing is filtered out or judged
+        OK/NOK - the raw read-out is simply reported back.
+        """
+        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+
+        processing_time_ms = round(elapsed_ms, 1)
+        full_text = " ".join(c["text"] for c in candidates).strip()
+        log.debug(
+            "PaddleOCR read completed: processing_time_ms=%s detections=%s text=%r",
+            processing_time_ms,
+            len(candidates),
+            full_text,
+        )
+        result = {
+            "detections": candidates,
+            "text": full_text,
+            "processing_time_ms": processing_time_ms,
+            "mode": "ocread",
         }
 
         if profile_data is not None:

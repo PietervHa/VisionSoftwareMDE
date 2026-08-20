@@ -15,7 +15,7 @@ from __future__ import annotations
 import multiprocessing as mp
 
 
-def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threads: int) -> None:
+def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threads: int, use_angle_cls: bool) -> None:
     import os
     os.environ.setdefault("FLAGS_use_mkldnn", "0")
     os.environ.setdefault("PADDLE_DISABLE_FAST_MATH", "1")
@@ -25,11 +25,15 @@ def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threa
     import numpy as np
     from paddleocr import PaddleOCR as _PaddleOCR
 
-    ocr = _PaddleOCR(lang=lang, cpu_threads=cpu_threads)
+    # use_angle_cls loads and runs PaddleOCR's text-direction classifier, so
+    # characters that are rotated/upside-down relative to the frame (common
+    # with dot-print/pin-stamped markings) get rotated upright before the
+    # recognition model sees them, instead of being fed in sideways.
+    ocr = _PaddleOCR(lang=lang, cpu_threads=cpu_threads, use_angle_cls=use_angle_cls)
 
     # Pay Paddle's own cold-start cost here, once, at worker startup.
     try:
-        ocr.ocr(np.zeros((64, 64, 3), dtype=np.uint8))
+        ocr.ocr(np.zeros((64, 64, 3), dtype=np.uint8), cls=use_angle_cls)
     except Exception:
         pass
 
@@ -43,7 +47,7 @@ def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threa
         if job_id is None:  # shutdown sentinel
             break
         try:
-            result = ocr.ocr(frame)
+            result = ocr.ocr(frame, cls=use_angle_cls)
             response_q.put((job_id, result))
         except Exception as exc:
             response_q.put((job_id, {"__error__": str(exc)}))
@@ -54,13 +58,13 @@ class PaddleOCRWorker:
     for calling `_PaddleOCR(...).ocr(frame)` directly — same `.ocr(frame)`
     call, same return shape, just routed through a separate process."""
 
-    def __init__(self, lang: str = "en", cpu_threads: int = 4, ready_timeout: float = 60.0):
+    def __init__(self, lang: str = "en", cpu_threads: int = 4, use_angle_cls: bool = True, ready_timeout: float = 60.0):
         ctx = mp.get_context("spawn")
         self._request_q = ctx.Queue()
         self._response_q = ctx.Queue()
         self._process = ctx.Process(
             target=_worker_loop,
-            args=(self._request_q, self._response_q, lang, cpu_threads),
+            args=(self._request_q, self._response_q, lang, cpu_threads, use_angle_cls),
             daemon=True,
         )
         self._process.start()
