@@ -26,7 +26,7 @@ def _warn_missing_env_vars() -> None:
     Checks for required environment variables and issues warnings if they are missing.
     """
     missing = []
-    for env_name in ("ROBOFLOW_API_KEY", "MAINTENANCE_PASSWORD"):
+    for env_name in ("ROBOFLOW_API_KEY",):
         if not str(os.environ.get(env_name, "")).strip():
             missing.append(env_name)
 
@@ -147,9 +147,11 @@ def _normalize_object_detection_config(config: dict) -> dict:
         "api_url": roboflow_api_url,
     }
 
-    security_cfg = _as_dict(config.get("security"))
-    security_cfg["maintenance_password"] = str(os.environ.get("MAINTENANCE_PASSWORD", "")).strip()
-    config["security"] = security_cfg
+    # NOTE: maintenance-mode access used to be gated by a single shared
+    # password read from here. That's gone, login is now per-user via the
+    # `users` table (see backend/core/auth.py, QC_tools/manage_users.py),
+    # so there is nothing security-related left to load from config/env.
+    config["security"] = _as_dict(config.get("security"))
 
     config["object_detection"] = normalized
     return config

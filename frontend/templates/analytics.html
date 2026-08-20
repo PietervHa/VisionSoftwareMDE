@@ -3,11 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analytics - Vision Software</title>
+    <title>MDE Automation — Analytics</title>
+    <link rel="icon" href="/static/img/mde_logo.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <link rel="stylesheet" href="/static/analytics.css">
 </head>
 <body>
+    <div class="brand-bar">
+        <img src="/static/img/mde_logo.png" alt="MDE Automation">
+        <div class="brand-bar-text">
+            <span class="brand-bar-name">MDE AUTOMATION</span>
+            <span class="brand-bar-sub">Vision Inspection</span>
+        </div>
+    </div>
+
     <main class="page">
         <header class="header">
             <div class="header-left">
@@ -24,6 +33,19 @@
             </div>
             <div id="refreshError" class="refresh-error">Failed to refresh</div>
         </header>
+
+        <section class="export-panel">
+            <div class="export-label">Export inspection data</div>
+            <div class="export-controls">
+                <label for="export-start">From</label>
+                <input type="date" id="export-start">
+                <label for="export-end">To</label>
+                <input type="date" id="export-end">
+                <button id="btn-export-csv" class="tab-btn">Export CSV</button>
+                <button id="btn-export-xlsx" class="tab-btn">Export Excel</button>
+            </div>
+            <div id="exportError" class="refresh-error"></div>
+        </section>
 
         <section class="cards">
             <article class="card">
@@ -67,4 +89,3 @@
     <script src="/static/analytics.js"></script>
 </body>
 </html>
-

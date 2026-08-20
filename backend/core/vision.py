@@ -16,6 +16,9 @@ from backend.detection.objectdetection import run_object_detection
 from backend.detection.ocr import OCR
 from backend.utils.logger import get_logger
 import time
+import os
+import torch
+torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
 
 logger = get_logger(__name__)
 
@@ -23,7 +26,7 @@ logger = get_logger(__name__)
 VISION_MODE = cfg["vision_mode"]
 
 # Global instances managed by this module
-ocr_instance = OCR()
+ocr_instance = None
 _inspection_engine: Optional[InspectionEngine] = None
 _app_state: Optional[Any] = None
 _cached_vision_mode: str = cfg.get("vision_mode", "object_detection")
@@ -61,6 +64,8 @@ def bind_app_state(app_state) -> None:
     _app_state = app_state
     _cached_vision_mode = cfg.get("vision_mode", "object_detection")
     ocr_instance = OCR(app_state=app_state)
+    if hasattr(ocr_instance, "warmup"):
+        ocr_instance.warmup()
     _inspection_engine = InspectionEngine(app_state)
 
     od_cfg = cfg.get("object_detection", {})
@@ -233,6 +238,21 @@ def run_vision(frame, callback=None, profile: bool = False):
     
     Supports both synchronous and asynchronous (via callback) execution.
     """
+    if frame is None:
+        no_frame_result = {
+            "status": "NOK",
+            "detections": [],
+            "processing_time_ms": 0,
+            "error": "no_frame",
+        }
+        mode_getter = getattr(_app_state, "get_vision_mode", None)
+        mode = mode_getter() if callable(mode_getter) else _cached_vision_mode
+        normalized = _normalize_result(no_frame_result, mode)
+        if callback:
+            callback(normalized)
+            return None
+        return normalized
+
     # The active mode is resolved from app state first so runtime changes win
     # over the cached startup configuration.
     mode_getter = getattr(_app_state, "get_vision_mode", None)

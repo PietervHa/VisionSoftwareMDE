@@ -1,14 +1,20 @@
+import csv
+import io
 import json
-import os
+import secrets
 from datetime import date, datetime, timedelta
 import cv2
-from flask import Flask, Response, send_file
-from flask_cors import CORS
-from flask import jsonify, request
+from fastapi import FastAPI, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from openpyxl import Workbook
+from pydantic import BaseModel
 from pathlib import Path
+from backend.core import auth, db
 from backend.core.config_loader import cfg
 from backend.utils.roi import draw_roi
-from tools.capture_dataset import DatasetCapture
+from QC_tools.capture_dataset import DatasetCapture
 import time
 
 
@@ -19,14 +25,107 @@ def _resolve_repo_path(path: str) -> Path:
     return resolved.resolve()
 
 
-def create_app(camera, app_state):
-    app = Flask(__name__)
-    CORS(app)
+# Only paths under this directory may be loaded as a classifier, even by a
+# maintenance-authenticated request. Prevents /load_classifier from being
+# pointed at an arbitrary location on disk.
+_MODELS_ROOT = (Path(__file__).resolve().parents[1] / "models").resolve()
 
-    # shared DatasetCapture instance for the lifetime of this Flask app
+
+def _is_within_models_dir(resolved_path: Path) -> bool:
+    try:
+        return resolved_path.is_relative_to(_MODELS_ROOT)
+    except AttributeError:  # pragma: no cover - Python < 3.9 fallback
+        try:
+            resolved_path.relative_to(_MODELS_ROOT)
+            return True
+        except ValueError:
+            return False
+
+
+# Columns that always appear first, in this order, in an export.
+_CORE_EXPORT_COLUMNS = [
+    "timestamp", "status", "mode", "confidence_threshold",
+    "processing_time_ms", "cycle_time_ms", "error",
+]
+
+
+def _build_export_table(results: list) -> tuple:
+    extra_columns = set()
+    for r in results:
+        extra_columns.update(k for k in r.keys() if k not in _CORE_EXPORT_COLUMNS)
+    headers = _CORE_EXPORT_COLUMNS + sorted(extra_columns)
+
+    rows = []
+    for r in results:
+        row = []
+        for col in headers:
+            value = r.get(col)
+            if isinstance(value, (list, dict)):
+                value = json.dumps(value, ensure_ascii=False)
+            row.append(value)
+        rows.append(row)
+    return headers, rows
+
+
+# --- Request bodies -------------------------------------------------------
+# Pydantic models replace Flask's `request.json or {}` pattern. Defaults
+# mirror the old `data.get(key, default)` calls exactly.
+
+class ThresholdBody(BaseModel):
+    threshold: float = 0.5
+
+
+class MaintenanceModeBody(BaseModel):
+    maintenance_mode: bool = False
+    username: str = ""
+    password: str = ""
+
+
+class VisionModeBody(BaseModel):
+    vision_mode: str = ""
+
+
+class OcrKeywordBody(BaseModel):
+    ocr_keyword: str = ""
+
+
+class LoadClassifierBody(BaseModel):
+    model_path: str = ""
+
+
+class DatasetCaptureBody(BaseModel):
+    label: str = ""
+
+
+def create_app(camera, app_state) -> FastAPI:
+    app = FastAPI()
+
+    db.init_db()
+
+    # flask-cors' CORS(app) defaults to allowing all origins/methods/headers
+    # without credentials; this mirrors that.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    # shared DatasetCapture instance for the lifetime of this app
     dataset_capture = DatasetCapture()
 
     JPEG_QUALITY = int(cfg.get("hmi", {}).get("stream_quality", 75))
+
+    def _is_maintenance_access(request: Request) -> bool:
+        if not app_state.get_maintenance_mode():
+            return False
+
+        cookie_token = request.cookies.get("maintenance_session", "")
+        return bool(cookie_token) and cookie_token == app_state.get_maintenance_session_token()
 
     def generate_frames():
         if not cfg["hmi"]["enable_video_feed"]:
@@ -77,120 +176,223 @@ def create_app(camera, app_state):
             if remaining_ms > 0:
                 time.sleep(remaining_ms / 1000)
 
-    @app.route("/")
+    # Applied to the index page and the /status auth check so that no
+    # browser, proxy, or embedded kiosk webview caches a response that
+    # reflects maintenance access. Without this, some webviews can satisfy
+    # a back-button navigation straight from disk/HTTP cache instead of
+    # hitting the network, bypassing the pageshow/bfcache reload in hmi.js.
+    _NO_STORE_HEADERS = {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        "Pragma": "no-cache",
+    }
+
+    @app.get("/")
     def index():
         template_path = Path(__file__).resolve().parent / "templates" / "hmi.html"
-        return send_file(template_path)
+        return FileResponse(template_path, headers=_NO_STORE_HEADERS)
 
-    @app.route("/status")
-    def get_status():
-        return jsonify({
+    @app.get("/status")
+    def get_status(request: Request, response: Response):
+        response.headers.update(_NO_STORE_HEADERS)
+        is_maintenance = _is_maintenance_access(request)
+        return {
             "vision_mode": app_state.get_vision_mode(),
-            "maintenance_mode": app_state.get_maintenance_mode(),
+            "maintenance_mode": is_maintenance,
+            "username": app_state.get_maintenance_session_user() if is_maintenance else None,
             "machine_id": cfg["machine_id"],
-            "version": "1.0.0"
-        })
+            "version": "1.0.0",
+        }
 
-    @app.route("/result")
+    @app.get("/result")
     def get_result():
-        return jsonify(app_state.get_snapshot())
+        return app_state.get_snapshot()
 
-    @app.route("/threshold")
+    @app.get("/threshold")
     def get_threshold():
-        return jsonify({"threshold": app_state.get_threshold()})
+        return {"threshold": app_state.get_threshold()}
 
-    @app.route("/threshold", methods=["POST"])
-    def set_threshold():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        new_value = float(data.get("threshold", 0.5))
-        app_state.set_threshold(new_value)
-        return jsonify({"threshold": app_state.get_threshold()})
+    @app.post("/threshold")
+    def set_threshold(body: ThresholdBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        app_state.set_threshold(body.threshold)
+        return {"threshold": app_state.get_threshold()}
 
-    @app.route("/maintenance_mode", methods=["POST"])
-    def set_maintenance_mode():
-        data = request.json or {}
-        app_state.set_maintenance_mode(data.get("maintenance_mode", False))
-        return jsonify({"maintenance_mode": app_state.get_maintenance_mode()})
+    @app.post("/maintenance_mode")
+    def set_maintenance_mode(body: MaintenanceModeBody, request: Request, response: Response):
+        # Entering maintenance mode always requires a valid username+password
+        # against the `users` table. Every attempt -- success or failure,
+        # including unknown usernames -- is logged to login_log. Unknown
+        # usernames are called out explicitly (rather than folded into a
+        # generic "incorrect" message) and, since there's no real account to
+        # attach a strike to, they can never trigger a lockout -- only a
+        # streak of failures against a username that actually exists can.
+        if body.maintenance_mode:
+            username = body.username.strip()
+            client_ip = request.client.host if request.client else None
 
-    @app.route("/vision_mode", methods=["POST"])
-    def set_vision_mode():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        app_state.set_vision_mode(data.get("vision_mode", ""))
-        return jsonify({"vision_mode": app_state.get_vision_mode()})
+            user = db.get_user(username) if username else None
+            if user is None:
+                # Still run a scrypt hash against a dummy value so an unknown
+                # username takes roughly as long as a known one with a wrong
+                # password -- a minor defense-in-depth measure even though
+                # the message below already tells the caller the account
+                # doesn't exist.
+                auth.verify_password(body.password, auth.DUMMY_PASSWORD_HASH)
+                db.record_login(username or "(empty)", False, client_ip)
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "unknown_user", "message": "No account exists for that username."},
+                )
 
-    @app.route("/camera_rotation", methods=["POST"])
-    def rotate_camera():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
+            recent_failures = db.get_recent_failures_since_last_success(username, limit=auth.MAX_FAILED_ATTEMPTS)
+            unlock_at = auth.lockout_until(recent_failures)
+            if unlock_at is not None:
+                # Locked: don't even check the password, and log this attempt
+                # as a failure too, so continuing to hammer a locked account
+                # extends the lock rather than doing nothing.
+                db.record_login(username, False, client_ip)
+                return JSONResponse(
+                    status_code=403,
+                    content={
+                        "error": "locked_out",
+                        "message": f"Account locked after repeated failed attempts. Try again after {unlock_at.strftime('%H:%M:%S')}.",
+                        "locked_until": unlock_at.isoformat(),
+                    },
+                )
+
+            password_ok = auth.verify_password(body.password, user["password_hash"])
+            db.record_login(username, password_ok, client_ip)
+
+            if not password_ok:
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "invalid_password", "message": "Incorrect password."},
+                )
+
+            session_token = secrets.token_urlsafe(24)
+            app_state.set_maintenance_mode(True)
+            app_state.set_maintenance_session_token(session_token)
+            app_state.set_maintenance_session_user(username)
+            response.set_cookie(
+                "maintenance_session",
+                session_token,
+                httponly=True,
+                samesite="lax",
+                max_age=60 * 30,
+                path="/",
+            )
+            return {"maintenance_mode": True, "username": username}
+
+        app_state.set_maintenance_mode(False)
+        app_state.set_maintenance_session_token("")
+        app_state.set_maintenance_session_user("")
+        response.delete_cookie("maintenance_session", path="/")
+        return {"maintenance_mode": False}
+
+    @app.delete("/login_log")
+    def clear_login_log(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        deleted = db.clear_login_log()
+        return {"cleared": deleted}
+
+    @app.get("/login_log")
+    def login_log(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        return {"logins": db.get_recent_logins(limit=20)}
+
+    @app.post("/vision_mode")
+    def set_vision_mode(body: VisionModeBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        app_state.set_vision_mode(body.vision_mode)
+        return {"vision_mode": app_state.get_vision_mode()}
+
+    @app.post("/camera_rotation")
+    def rotate_camera(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
         app_state.rotate_camera()
-        return jsonify({"camera_rotation": app_state.get_camera_rotation()})
+        return {"camera_rotation": app_state.get_camera_rotation()}
 
-    @app.route("/ocr_keyword")
+    @app.get("/ocr_keyword")
     def get_ocr_keyword():
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+        return {"ocr_keyword": app_state.get_ocr_keyword()}
 
-    @app.route("/ocr_keyword", methods=["POST"])
-    def set_ocr_keyword():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        new_keyword = data.get("ocr_keyword", "").strip()
+    @app.post("/ocr_keyword")
+    def set_ocr_keyword(body: OcrKeywordBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        new_keyword = body.ocr_keyword.strip()
         if not new_keyword:
-            return jsonify({"error": "ocr_keyword cannot be empty"}), 400
+            return JSONResponse(status_code=400, content={"error": "ocr_keyword cannot be empty"})
         app_state.set_ocr_keyword(new_keyword)
-        return jsonify({"ocr_keyword": app_state.get_ocr_keyword()})
+        return {"ocr_keyword": app_state.get_ocr_keyword()}
 
-    @app.route("/maintenance_password")
-    def get_maintenance_password():
-        password = os.environ.get("MAINTENANCE_PASSWORD", "")
-        return jsonify({"maintenance_password": password})
-
-    @app.route("/load_classifier", methods=["POST"])
-    def load_classifier():
-        if not app_state.get_maintenance_mode():
-            return jsonify({"error": "Not in maintenance mode"}), 403
-        data = request.json or {}
-        model_path = str(data.get("model_path", "")).strip()
+    @app.post("/load_classifier")
+    def load_classifier(body: LoadClassifierBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        model_path = body.model_path.strip()
         resolved_path = _resolve_repo_path(model_path)
         if not model_path or not resolved_path.exists():
-            return jsonify({"error": "model_path does not exist"}), 400
+            return JSONResponse(status_code=400, content={"error": "model_path does not exist"})
+        if not _is_within_models_dir(resolved_path):
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"model_path must be inside {_MODELS_ROOT.name}/"},
+            )
         classifier_loaded = bool(app_state.load_classifier(str(resolved_path)))
-        return jsonify({"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)})
+        return {"classifier_loaded": classifier_loaded, "model_path": str(resolved_path)}
 
-    @app.route("/classifier_status")
+    @app.get("/classifier_status")
     def get_classifier_status():
         status = app_state.get_classifier_status()
-        return jsonify({
+        return {
             "classifier_loaded": bool(status.get("loaded", False)),
             "model_path": status.get("model_path") or None,
-        })
+        }
 
-    @app.route("/video_feed")
+    @app.get("/video_feed")
     def video_feed():
-        return Response(
+        return StreamingResponse(
             generate_frames(),
-            mimetype="multipart/x-mixed-replace; boundary=frame",
+            media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
-    @app.route("/reset_counters", methods=["POST"])
-    def reset_counters():
-        app_state.reset_counters()
-        return jsonify({"status": "counters reset"})
+    @app.get("/camera_status")
+    def camera_status(response: Response):
+        # Polled by the HMI to drive the "reconnecting..." overlay and the
+        # "missing camera" popup. No auth required - it's read-only status.
+        response.headers.update(_NO_STORE_HEADERS)
+        return {"connected": camera.is_connected()}
 
-    @app.route("/dataset/capture", methods=["POST"])
-    def dataset_capture_route():
-        data = request.json or {}
-        label = str(data.get("label", "")).lower()
+    @app.post("/reset_counters")
+    def reset_counters(request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"error": "Not in maintenance mode"})
+        app_state.reset_counters()
+        return {"status": "counters reset"}
+
+    @app.post("/dataset/capture")
+    def dataset_capture_route(body: DatasetCaptureBody, request: Request):
+        if not _is_maintenance_access(request):
+            return JSONResponse(status_code=403, content={"success": False, "error": "Not in maintenance mode"})
+        label = body.label.lower()
         if label not in ("ok", "defective"):
-            return jsonify({"success": False, "error": "label must be 'ok' or 'defective'"}), 400
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "label must be 'ok' or 'defective'"},
+            )
 
         frame = camera.get_frame()
         if frame is None:
-            return jsonify({"success": False, "error": "no frame available"}), 500
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "no frame available"},
+            )
 
         # apply the same rotation logic as DatasetCapture
         rotated = dataset_capture._apply_rotation(frame)
@@ -198,36 +400,31 @@ def create_app(camera, app_state):
         try:
             dataset_capture._save_frame(rotated, label)
         except Exception as exc:
-            return jsonify({"success": False, "error": str(exc)}), 500
+            return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
 
-        return jsonify({
+        return {
             "success": True,
             "ok": dataset_capture.counters.get("ok", 0),
             "defective": dataset_capture.counters.get("defective", 0),
-        })
+        }
 
-    @app.route("/dataset/counts")
+    @app.get("/dataset/counts")
     def dataset_counts():
-        return jsonify(dataset_capture.counters)
+        return dataset_capture.counters
 
-    @app.route("/analytics")
+    @app.get("/analytics")
     def analytics():
         template_path = Path(__file__).resolve().parent / "templates" / "analytics.html"
-        return send_file(template_path)
+        return FileResponse(template_path)
 
-    @app.route("/analytics/data")
-    def analytics_data():
+    @app.get("/analytics/data")
+    def analytics_data(date_param: str = Query(default="", alias="date")):
         try:
-            result_dir = cfg.get("output", {}).get("result_dir", "data/results")
-            output_dir = Path(result_dir)
-            if not output_dir.is_absolute():
-                output_dir = Path(__file__).resolve().parents[1] / output_dir
-
             # Parse requested date, default to today, clamp to 7-day window
             today = date.today()
             min_date = today - timedelta(days=6)  # 7 days including today
 
-            raw_date = request.args.get("date", "")
+            raw_date = date_param
             try:
                 requested_date = date.fromisoformat(raw_date) if raw_date else today
             except ValueError:
@@ -239,18 +436,7 @@ def create_app(camera, app_state):
             if requested_date < min_date:
                 requested_date = min_date
 
-            daily_file = output_dir / f"{requested_date.isoformat()}.jsonl"
-
-            results = []
-            if daily_file.exists():
-                with daily_file.open("r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            try:
-                                results.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
+            results = db.query_summary(requested_date, requested_date)
 
             total = len(results)
             ok_count = sum(1 for r in results if r.get("status") == "OK")
@@ -267,33 +453,26 @@ def create_app(camera, app_state):
             # Build timeline: group results by hour (0-23), count OK and NOK per hour
             timeline = {str(h): {"ok": 0, "nok": 0} for h in range(24)}
             for r in results:
-                ts = r.get("timestamp", "")
-                try:
-                    hour = str(datetime.fromisoformat(ts).hour)
-                    if r.get("status") == "OK":
-                        timeline[hour]["ok"] += 1
-                    else:
-                        timeline[hour]["nok"] += 1
-                except Exception:
+                ts = r.get("timestamp")
+                if not isinstance(ts, datetime):
                     continue
+                hour = str(ts.hour)
+                if r.get("status") == "OK":
+                    timeline[hour]["ok"] += 1
+                else:
+                    timeline[hour]["nok"] += 1
 
             # Builds speed timeline in 15-minute buckets
             # Key format: "HH:MM" for each 15-min slot (00:00, 00:15, 00:30, 00:45, 01:00 ...)
             speed_buckets = {}
             for r in results:
-                ts = r.get("timestamp", "")
+                ts = r.get("timestamp")
                 pt = r.get("processing_time_ms")
-                if not isinstance(pt, (int, float)):
+                if not isinstance(pt, (int, float)) or not isinstance(ts, datetime):
                     continue
-                try:
-                    dt = datetime.fromisoformat(ts)
-                    minute_slot = (dt.minute // 15) * 15
-                    key = f"{dt.hour:02d}:{minute_slot:02d}"
-                    if key not in speed_buckets:
-                        speed_buckets[key] = []
-                    speed_buckets[key].append(float(pt))
-                except Exception:
-                    continue
+                minute_slot = (ts.minute // 15) * 15
+                key = f"{ts.hour:02d}:{minute_slot:02d}"
+                speed_buckets.setdefault(key, []).append(float(pt))
 
             speed_timeline = {}
             for key, times in speed_buckets.items():
@@ -303,7 +482,7 @@ def create_app(camera, app_state):
                     "max": round(max(times), 2),
                 }
 
-            return jsonify({
+            return {
                 "date": requested_date.isoformat(),
                 "is_today": requested_date == today,
                 "is_min_date": requested_date <= min_date,
@@ -314,9 +493,68 @@ def create_app(camera, app_state):
                 "avg_processing_ms": avg_processing_ms,
                 "timeline": timeline,
                 "speed_timeline": speed_timeline,
-            })
+            }
 
         except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+
+    @app.get("/analytics/export")
+    def analytics_export(
+        start: str = Query(default=""),
+        end: str = Query(default=""),
+        export_format: str = Query(default="csv", alias="format"),
+    ):
+        try:
+            try:
+                start_date = date.fromisoformat(start)
+                end_date = date.fromisoformat(end)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "start and end must be dates in YYYY-MM-DD format"},
+                )
+
+            if start_date > end_date:
+                start_date, end_date = end_date, start_date
+
+            if export_format not in ("csv", "xlsx"):
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "format must be 'csv' or 'xlsx'"},
+                )
+
+            results = db.query_full(start_date, end_date)
+            headers, rows = _build_export_table(results)
+            filename_base = f"inspections_{start_date.isoformat()}_to_{end_date.isoformat()}"
+
+            if export_format == "csv":
+                buffer = io.StringIO()
+                writer = csv.writer(buffer)
+                writer.writerow(headers)
+                writer.writerows(rows)
+                # utf-8-sig so Excel recognizes the encoding instead of mangling accented characters
+                csv_bytes = buffer.getvalue().encode("utf-8-sig")
+                return Response(
+                    content=csv_bytes,
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+                )
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Inspections"
+            sheet.append(headers)
+            for row in rows:
+                sheet.append(row)
+            xlsx_buffer = io.BytesIO()
+            workbook.save(xlsx_buffer)
+            return Response(
+                content=xlsx_buffer.getvalue(),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+            )
+
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
 
     return app

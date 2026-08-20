@@ -1,9 +1,8 @@
-﻿let CURRENT_MODE = "maintenance";
+let CURRENT_MODE = "production";
+let CURRENT_USER = null;
 let VISION_MODE = null;
 let currentThreshold = null; // mirrors backend value
-let LAST_SYNCED_MODE = null;
 let LAST_APPLIED_MODE = null;
-let PASSWORD = null; // Loaded from backend
 let LAST_DATASET_COUNTS_FETCH = 0;
 const DATASET_COUNTS_POLL_MS = 5000;
 let DATASET_CAPTURE_ACTIVE = false;
@@ -104,12 +103,19 @@ async function updateResult() {
 }
 
 async function loadStatus() {
-    const res = await fetch("/status");
+    // cache: "no-store" ensures this always hits the server for a fresh
+    // maintenance-access check, rather than a browser-cached /status reply.
+    const res = await fetch("/status", { credentials: "same-origin", cache: "no-store" });
     const data = await res.json();
     VISION_MODE = data.vision_mode;
     CURRENT_MODE = data.maintenance_mode ? "maintenance" : "production";
-    LAST_SYNCED_MODE = CURRENT_MODE;
+    CURRENT_USER = data.maintenance_mode ? (data.username || null) : null;
     updateVisionModeButtons();
+
+    const machineIdLabel = document.getElementById("machineIdLabel");
+    if (machineIdLabel && data.machine_id) {
+        machineIdLabel.textContent = data.machine_id;
+    }
 }
 
 function getPollingIntervalMs() {
@@ -140,16 +146,6 @@ async function loadOcrKeyword() {
     const res = await fetch("/ocr_keyword");
     const data = await res.json();
     document.getElementById("ocrKeywordInput").value = data.ocr_keyword;
-}
-
-async function loadMaintenancePassword() {
-    try {
-        const res = await fetch("/maintenance_password");
-        const data = await res.json();
-        PASSWORD = data.maintenance_password || "";
-    } catch (e) {
-        console.error("Failed to load maintenance password:", e);
-    }
 }
 
 function updateDatasetCaptureUI() {
@@ -204,6 +200,70 @@ function toggleDatasetCapture() {
     }
 }
 
+
+/* =========================
+   CAMERA CONNECTION MONITORING
+========================= */
+let CAMERA_CONNECTED = null;       // null = not polled yet
+let CAMERA_EVER_CONNECTED = false; // false the whole time => "missing from the start"
+const CAMERA_STATUS_POLL_MS = 1000;
+
+function reloadCameraFeed() {
+    const img = document.getElementById("cameraFeed");
+    if (!img) return;
+    // Cache-bust so the browser opens a brand new MJPEG connection instead
+    // of trusting a stream that may have gone stale while the camera was
+    // disconnected.
+    img.src = "/video_feed?t=" + Date.now();
+}
+
+async function pollCameraStatus() {
+    try {
+        const res = await fetch("/camera_status", { cache: "no-store" });
+        const data = await res.json();
+        const connected = !!data.connected;
+
+        const overlay = document.getElementById("cameraDisconnectedOverlay");
+        const modal = document.getElementById("missingCameraModal");
+        const wasConnected = CAMERA_CONNECTED;
+
+        if (connected) {
+            // Reload the feed on the transition into "connected" (covers
+            // both a reconnect after a drop and the camera showing up for
+            // the first time), so the live feed is guaranteed fresh.
+            if (wasConnected !== true) {
+                reloadCameraFeed();
+            }
+            CAMERA_CONNECTED = true;
+            CAMERA_EVER_CONNECTED = true;
+            if (overlay) overlay.hidden = true;
+            if (modal) modal.hidden = true;
+        } else {
+            CAMERA_CONNECTED = false;
+            if (!CAMERA_EVER_CONNECTED) {
+                // Never seen a frame since the page loaded: camera was
+                // missing from the start, so block with the popup.
+                if (modal) modal.hidden = false;
+                if (overlay) overlay.hidden = true;
+            } else {
+                // It was working before and just dropped out; recovery is
+                // already running in the background, so just show a light
+                // "reconnecting" overlay on the feed itself.
+                if (overlay) overlay.hidden = false;
+                if (modal) modal.hidden = true;
+            }
+        }
+    } catch (e) {
+        console.error("Failed to fetch camera status:", e);
+    }
+}
+
+function startCameraStatusPolling() {
+    pollCameraStatus();
+    setInterval(pollCameraStatus, CAMERA_STATUS_POLL_MS);
+}
+
+
 /* =========================
    DATASET CAPTURE
 ========================= */
@@ -216,6 +276,7 @@ async function captureDatasetImage(label) {
 
         const res = await fetch('/dataset/capture', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ label })
         });
@@ -240,21 +301,106 @@ document.getElementById("applyThreshold").addEventListener("click", async () => 
     const value = parseFloat(document.getElementById("thresholdInput").value);
 
     if (isNaN(value) || value < 0 || value > 1) {
-        alert("Threshold must be between 0.0 and 1.0");
+        showToast("Threshold must be between 0.0 and 1.0", { type: "error" });
         return;
     }
 
     try {
-        await fetch("/threshold", {
+        const res = await fetch("/threshold", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threshold: value })
         });
 
+        if (!res.ok) {
+            showToast("Failed to apply threshold: not in maintenance mode (session may have expired). Reload the page and try again.", { type: "error" });
+            return;
+        }
+
         currentThreshold = value; // freeze this value for production
     } catch (e) {
         console.error("Failed to set threshold:", e);
+        showToast("Failed to apply threshold: network error. Check the connection and try again.", { type: "error" });
     }
+});
+
+/* =========================
+   LOGIN LOG (maintenance mode only)
+========================= */
+/* escapeHtml() is defined in dialogs.js, loaded before this file */
+
+function formatLoginTimestamp(ts) {
+    if (!ts) return "-";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString();
+}
+
+function renderLoginLogRow(entry) {
+    const success = !!entry.success;
+    const cls = success ? "success" : "fail";
+    const statusText = success ? "OK" : "FAILED";
+    const user = escapeHtml(entry.username || "unknown");
+    const time = escapeHtml(formatLoginTimestamp(entry.timestamp));
+    return `<div class="login-log-row ${cls}">` +
+        `<span class="login-log-user">${user}</span>` +
+        `<span class="login-log-status">${statusText}</span>` +
+        `<span class="login-log-time">${time}</span>` +
+        `</div>`;
+}
+
+async function refreshLoginLog() {
+    const listEl = document.getElementById("loginLogList");
+    if (!listEl) return;
+    try {
+        const res = await fetch("/login_log", { credentials: "same-origin", cache: "no-store" });
+        if (!res.ok) {
+            listEl.textContent = "Unable to load login history.";
+            return;
+        }
+        const data = await res.json();
+        const entries = Array.isArray(data.logins) ? data.logins : [];
+        listEl.innerHTML = entries.length
+            ? entries.map(renderLoginLogRow).join("")
+            : "No login attempts recorded.";
+    } catch (e) {
+        console.error("Failed to load login log:", e);
+        listEl.textContent = "Unable to load login history.";
+    }
+}
+
+document.getElementById("refreshLoginLogBtn")?.addEventListener("click", () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    refreshLoginLog();
+});
+
+document.getElementById("clearLoginLogBtn")?.addEventListener("click", async () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    const confirmed = await showConfirmDialog({
+        title: "Clear Login History",
+        message: "This also lifts any account lockout currently in effect. This cannot be undone.",
+        confirmLabel: "Clear",
+        destructive: true
+    });
+    if (!confirmed) return;
+
+    try {
+        const res = await fetch("/login_log", {
+            method: "DELETE",
+            credentials: "same-origin"
+        });
+        if (!res.ok) {
+            showToast("Could not clear login history.", { type: "error" });
+            return;
+        }
+    } catch (e) {
+        console.error("Failed to clear login log:", e);
+        showToast("Could not reach the server. Please try again.", { type: "error" });
+        return;
+    }
+
+    refreshLoginLog();
 });
 
 /* =========================
@@ -271,19 +417,22 @@ function applyMode() {
     const ocrKeywordSection = document.getElementById("ocrKeywordSection");
     const cycleTimeSection = document.getElementById("cycleTimeSection");
     const rotateBtn = document.getElementById("rotateCameraBtn");
-    const previousMode = LAST_APPLIED_MODE;
+    const resetBtn = document.getElementById("resetBtn");
 
     if (rotateBtn) {
         rotateBtn.style.display = CURRENT_MODE === "maintenance" ? "inline-block" : "none";
     }
 
+    const loginLogBox = document.getElementById("loginLogBox");
+
     if (CURRENT_MODE === "maintenance") {
-        banner.textContent = "MAINTENANCE MODE";
+        banner.textContent = CURRENT_USER ? `MAINTENANCE MODE — ${CURRENT_USER}` : "MAINTENANCE MODE";
         banner.className = "mode-overlay maintenance";
 
         input.disabled = false;
         applyBtn.disabled = false;
         if (ocrApplyBtn) ocrApplyBtn.disabled = false;
+        if (resetBtn) resetBtn.disabled = false;
         const captureToggleBtn = document.getElementById("captureToggleBtn");
         if (captureToggleBtn) captureToggleBtn.disabled = false;
         prodBtn.style.display = "inline-block";
@@ -298,6 +447,11 @@ function applyMode() {
             cycleTimeSection.style.display = "block";
         }
 
+        if (loginLogBox) {
+            loginLogBox.style.display = "block";
+            refreshLoginLog();
+        }
+
         if (currentThreshold !== null) input.value = currentThreshold;
     }
 
@@ -308,6 +462,7 @@ function applyMode() {
         input.disabled = true;
         applyBtn.disabled = true;
         if (ocrApplyBtn) ocrApplyBtn.disabled = true;
+        if (resetBtn) resetBtn.disabled = true;
         const captureToggleBtn = document.getElementById("captureToggleBtn");
         if (captureToggleBtn) captureToggleBtn.disabled = true;
         prodBtn.style.display = "none";
@@ -322,6 +477,10 @@ function applyMode() {
             cycleTimeSection.style.display = "none";
         }
 
+        if (loginLogBox) {
+            loginLogBox.style.display = "none";
+        }
+
         if (currentThreshold !== null) input.value = currentThreshold;
     }
 
@@ -334,27 +493,6 @@ function applyMode() {
     }
 
     updateDatasetCaptureUI();
-
-    if (previousMode !== null && previousMode !== CURRENT_MODE) {
-        syncModeToBackend();
-    }
-}
-
-async function syncModeToBackend() {
-    if (LAST_SYNCED_MODE === CURRENT_MODE) return;
-
-    LAST_SYNCED_MODE = CURRENT_MODE;
-
-    try {
-        await fetch("/maintenance_mode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ maintenance_mode: CURRENT_MODE === "maintenance" })
-        });
-    } catch (e) {
-        LAST_SYNCED_MODE = null;
-        console.error("Failed to sync maintenance mode:", e);
-    }
 }
 
 async function applyVisionMode(mode) {
@@ -373,6 +511,7 @@ async function applyVisionMode(mode) {
     try {
         await fetch("/vision_mode", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ vision_mode: mode })
         });
@@ -386,20 +525,68 @@ async function applyVisionMode(mode) {
 /* =========================
    BUTTON EVENTS
 ========================= */
-document.getElementById("startProductionBtn").addEventListener("click", () => {
-    if (!confirm("Start production mode?\n\nConfidence threshold will be locked.")) return;
+document.getElementById("startProductionBtn").addEventListener("click", async () => {
+    const confirmed = await showConfirmDialog({
+        title: "Start Production Mode",
+        message: "The confidence threshold will be locked until maintenance mode is entered again.",
+        confirmLabel: "Start Production",
+        destructive: false
+    });
+    if (!confirmed) return;
 
-    CURRENT_MODE = "production";
-    applyMode();
+    try {
+        const res = await fetch("/maintenance_mode", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ maintenance_mode: false })
+        });
+
+        if (!res.ok) {
+            showToast("Could not switch to production mode.", { type: "error" });
+            return;
+        }
+
+        CURRENT_MODE = "production";
+        CURRENT_USER = null;
+        applyMode();
+    } catch (e) {
+        console.error("Failed to switch to production mode:", e);
+        showToast("Could not reach the server. Please try again.", { type: "error" });
+    }
 });
 
-document.getElementById("startMaintenanceBtn").addEventListener("click", () => {
-    // Prompt for password without auto-filling it
-    const userPass = prompt("Enter password to enter maintenance mode:");
-    if (userPass !== PASSWORD) {
-        alert("Incorrect password. Access denied.");
-        return;
-    }
+document.getElementById("startMaintenanceBtn").addEventListener("click", async () => {
+    const loggedIn = await showLoginDialog(async (username, password) => {
+        try {
+            const res = await fetch("/maintenance_mode", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ maintenance_mode: true, username, password })
+            });
+
+            if (!res.ok) {
+                let message = "Incorrect username or password. Access denied.";
+                try {
+                    const errBody = await res.json();
+                    if (errBody && errBody.message) message = errBody.message;
+                } catch (e) {
+                    // response body wasn't JSON; fall back to the generic message above
+                }
+                return { ok: false, message };
+            }
+
+            const data = await res.json();
+            CURRENT_USER = data.username || username;
+            return { ok: true };
+        } catch (e) {
+            console.error("Failed to enter maintenance mode:", e);
+            return { ok: false, message: "Could not reach the server. Please try again." };
+        }
+    });
+
+    if (!loggedIn) return;
 
     CURRENT_MODE = "maintenance";
     applyMode();
@@ -419,6 +606,7 @@ document.getElementById("rotateCameraBtn").addEventListener("click", async () =>
     if (CURRENT_MODE !== "maintenance") return;
     await fetch("/camera_rotation", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({})
     });
@@ -427,17 +615,28 @@ document.getElementById("rotateCameraBtn").addEventListener("click", async () =>
 document.getElementById("applyOcrKeyword").addEventListener("click", async () => {
     if (CURRENT_MODE !== "maintenance") return;
     const value = document.getElementById("ocrKeywordInput").value.trim();
-    if (!value) { alert("Zoekwoord mag niet leeg zijn."); return; }
+    if (!value) { showToast("Search keyword cannot be empty.", { type: "error" }); return; }
     await fetch("/ocr_keyword", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ocr_keyword: value })
     });
 });
 
 document.getElementById("resetBtn").addEventListener("click", async () => {
-    if (!confirm("Are you sure you want to reset the counters?")) return;
-    await fetch("/reset_counters", { method: "POST" });
+    if (CURRENT_MODE !== "maintenance") return;
+    const confirmed = await showConfirmDialog({
+        title: "Reset Counters",
+        message: "This will reset the OK, NOK, and Total counters to zero. This cannot be undone.",
+        confirmLabel: "Reset",
+        destructive: true
+    });
+    if (!confirmed) return;
+    const res = await fetch("/reset_counters", { method: "POST", credentials: "same-origin" });
+    if (!res.ok) {
+        showToast("Reset failed: not in maintenance mode (session may have expired). Reload the page and try again.", { type: "error" });
+    }
 });
 
 document.getElementById("captureToggleBtn").addEventListener("click", () => {
@@ -448,7 +647,7 @@ document.getElementById("captureToggleBtn").addEventListener("click", () => {
 /* Keyboard shortcuts for dataset capture */
 document.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
-    
+
     if (key === "1" && DATASET_CAPTURE_ACTIVE) {
         e.preventDefault();
         captureDatasetImage("ok");
@@ -470,13 +669,25 @@ async function init() {
         await loadStatus();
         await loadThreshold();
         await loadOcrKeyword();
-        await loadMaintenancePassword();
         applyMode();
 
         startResultPolling();
+        startCameraStatusPolling();
     } catch (e) {
         console.error("Initialization failed:", e);
     }
 }
+
+window.addEventListener("pageshow", (event) => {
+    if (event.persisted) {
+        window.location.reload();
+    }
+});
+
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+        loadStatus().then(applyMode);
+    }
+});
 
 init();

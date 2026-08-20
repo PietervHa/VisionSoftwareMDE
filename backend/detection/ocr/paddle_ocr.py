@@ -9,7 +9,7 @@ import re
 import time
 import logging
 import os
-from paddleocr import PaddleOCR as _PaddleOCR
+from backend.detection.ocr.paddle_worker import PaddleOCRWorker
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
@@ -18,10 +18,6 @@ log = get_logger(__name__)
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
 
-# Disable oneDNN to avoid compatibility issues with PaddleOCR
-os.environ['PADDLE_DISABLE_FAST_MATH'] = '1'
-os.environ['FLAGS_use_mkldnn'] = '0'
-
 
 class PaddleOCR:
     """
@@ -29,8 +25,8 @@ class PaddleOCR:
     """
     def __init__(self, app_state=None):
         self.app_state = app_state
-        self._paddle = _PaddleOCR(lang="en")
         ocr_cfg = cfg["ocr"]
+        self._paddle = PaddleOCRWorker(lang="en", cpu_threads=int(ocr_cfg.get("cpu_threads", 4)))
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.keyword_set = set(self.keywords)
         self.date_regex = ocr_cfg["date_regex"]
@@ -48,6 +44,16 @@ class PaddleOCR:
             self.downscale,
             self.keywords,
         )
+
+    def warmup(self) -> None:
+        """Runs one throwaway OCR pass so Paddle's native-runtime cold-start
+        cost is paid at startup instead of during the first real OCR cycle."""
+        try:
+            import numpy as np
+            self._paddle.ocr(np.zeros((64, 64, 3), dtype="uint8"))
+            log.debug("PaddleOCR warm-up inference completed.")
+        except Exception as exc:
+            log.warning("PaddleOCR warm-up inference failed (non-fatal): %s", exc)
 
     def _preprocess_image(self, frame):
         """Enhance image contrast and clarity for better OCR"""

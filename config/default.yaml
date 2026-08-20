@@ -15,9 +15,9 @@ roi:
 
 # OCR settings
 ocr:
-  engine: "tesseract"   # valid values: "tesseract" (default), "paddleocr"
+  engine: "paddleocr"   # valid values: "tesseract" (default), "paddleocr"
   keywords:
-    - "www.theimagingsource.com"
+    - "Made in Germany"
   # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
   date_regex: '\b\d{2}/\d{2}/\d{4}\b'
   preprocess: "fast"  # valid values: "fast" (default), "accurate"
@@ -31,6 +31,7 @@ ocr:
 
 # Camera settings
 camera:
+  device_name: "DFK 22BUC03" # <--- Change this to your camera's device name, Thanks to Peter for the tip'
   index: 0
   width: 1280
   height: 1024
@@ -90,11 +91,27 @@ web:
 output:
   result_dir: "data/results"
 
+# Database settings — SQLite for now. Once MDE's MSSQL server can be
+# reached, switch the url below and nothing else needs to change:
+#   url: "mssql+pyodbc://user:password@server/db?driver=ODBC+Driver+17+for+SQL+Server"
+database:
+  url: "sqlite:///data/results.db"
+
+# Trigger settings
+# Automated long-running Q trigger for vision testing
+# Disabled by default so normal application startup is unchanged.
+trigger_test:
+  enabled: true
+  startup_delay_s: 30.0
+  interval_s: 1.0
+  max_hours: 8.0
+  max_images: 10000
+
 # Trigger settings
 trigger:
-  enabled: false        # Set to true to activate TCP trigger listener
+  enabled: true         # Set to true to activate TCP trigger listener
   type: "tcp"
-  host: "0.0.0.0"
+  host: "127.0.0.1"     # Local-only; change to 0.0.0.0 for a real PLC on the network
   port: 5001
   trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
   response_ok: "OK\n"   # Response sent back on OK result
@@ -102,6 +119,6 @@ trigger:
   timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
 
 # Security settings
-security:
-  maintenance_password: "SET_VIA_ENV"  # Password required to enter maintenance mode
-
+# Maintenance-mode login is per-user now (see the `users` table / QC_tools/manage_users.py),
+# not a single shared password, so there's nothing to configure here.
+security: {}

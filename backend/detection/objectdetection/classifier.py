@@ -52,7 +52,11 @@ class ImageClassifier:
             self.device = self.device or ("cuda" if torch.cuda.is_available() else "cpu")
             model_dir_str = str(model_dir)
             self.processor = AutoImageProcessor.from_pretrained(model_dir_str)
-            self.model = AutoModelForImageClassification.from_pretrained(model_dir_str)
+            # use_safetensors=True refuses to fall back to a pickled pytorch_model.bin,
+            # which can execute arbitrary code on load. Only accept safetensors weights.
+            self.model = AutoModelForImageClassification.from_pretrained(
+                model_dir_str, use_safetensors=True
+            )
             self.model.to(self.device)
             self.model.eval()
             self.model_path = model_dir_str
@@ -60,6 +64,14 @@ class ImageClassifier:
             raise RuntimeError(
                 f"Unable to load classifier assets from '{model_dir}'. "
                 "Ensure required model files are present (for example config and weights)."
+            ) from exc
+        except OSError as exc:
+            # transformers raises OSError (not FileNotFoundError) when no
+            # safetensors weights are found in an otherwise valid model dir.
+            raise RuntimeError(
+                f"Classifier at '{model_dir}' has no safetensors weights. "
+                "Only .safetensors checkpoints are accepted (pickled .bin files are "
+                "rejected for security reasons); re-export the model as safetensors."
             ) from exc
 
     def predict(self, pil_image: Image.Image) -> Dict[str, object]:
@@ -98,9 +110,20 @@ class ImageClassifier:
             "all_scores": all_scores,
         }
 
+    def warmup(self) -> None:
+        """Runs one throwaway inference so the native-runtime cold-start cost
+        (thread pool spin-up, oneDNN/MKL kernel selection) is paid at startup
+        instead of during the first real inspection cycle."""
+        if self.model is None or self.processor is None:
+            return
+        try:
+            self.predict(Image.new("RGB", (224, 224)))
+            logger.debug("Classifier warm-up inference completed.")
+        except Exception as exc:
+            logger.warning("Classifier warm-up inference failed (non-fatal): %s", exc)
+
     def is_loaded(self) -> bool:
         """
         Checks if the model and processor have been successfully loaded.
         """
         return self.model is not None
-

@@ -1,4 +1,4 @@
-        // Date navigation — start on today
+// Date navigation — start on today
         const _today = new Date();
         _today.setHours(0, 0, 0, 0);
         let currentDate = new Date(_today);
@@ -53,74 +53,79 @@
         let nokOnlyChart = null; // line chart instance for NOK only
         let speedChart = null; // line chart instance for processing speed
 
-        const chart = new Chart(document.getElementById("hourlyChart"), {
-            type: "bar",
-            data: {
-                labels: hourLabels,
-                datasets: [
-                    {
-                        label: "OK",
-                        data: okData,
-                        backgroundColor: "#1e7f34",
-                    },
-                    {
-                        label: "NOK",
-                        data: nokData,
-                        backgroundColor: "#9b1c1c",
-                    },
-                ],
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        labels: {
-                            color: "#eee",
+        let chart = null;
+        try {
+            chart = new Chart(document.getElementById("hourlyChart"), {
+                type: "bar",
+                data: {
+                    labels: hourLabels,
+                    datasets: [
+                        {
+                            label: "OK",
+                            data: okData,
+                            backgroundColor: "#2e8b57",
                         },
-                    },
-                    title: {
-                        display: true,
-                        text: "Inspections per Hour",
-                        color: "#eee",
-                        font: {
-                            size: 18,
+                        {
+                            label: "NOK",
+                            data: nokData,
+                            backgroundColor: "#ee1c25",
                         },
-                    },
+                    ],
                 },
-                scales: {
-                    x: {
-                        stacked: false,
-                        ticks: {
-                            color: "#aaa",
-                        },
-                        grid: {
-                            color: "rgba(255,255,255,0.08)",
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: "#ffffff",
+                            },
                         },
                         title: {
                             display: true,
-                            text: "Hour",
-                            color: "#aaa",
+                            text: "Inspections per Hour",
+                            color: "#ffffff",
+                            font: {
+                                size: 18,
+                            },
                         },
                     },
-                    y: {
-                        beginAtZero: true,
-                        ticks: {
-                            precision: 0,
-                            color: "#aaa",
+                    scales: {
+                        x: {
+                            stacked: false,
+                            ticks: {
+                                color: "#8a8a8a",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "Hour",
+                                color: "#8a8a8a",
+                            },
                         },
-                        grid: {
-                            color: "rgba(255,255,255,0.08)",
-                        },
-                        title: {
-                            display: true,
-                            text: "Count",
-                            color: "#aaa",
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0,
+                                color: "#8a8a8a",
+                            },
+                            grid: {
+                                color: "rgba(255,255,255,0.08)",
+                            },
+                            title: {
+                                display: true,
+                                text: "Count",
+                                color: "#8a8a8a",
+                            },
                         },
                     },
                 },
-            },
-        });
+            });
+        } catch (err) {
+            console.error("Chart.js kon niet initialiseren (bv. CDN niet bereikbaar); grafieken werken niet, rest van de pagina wel.", err);
+        }
 
         function formatTime(dateObj) {
             return dateObj.toLocaleTimeString([], { hour12: false });
@@ -224,16 +229,16 @@
                         {
                             label: "OK per Hour",
                             data: okPerHour,
-                            borderColor: "green",
-                            backgroundColor: "rgba(0,200,0,0.1)",
+                            borderColor: "#2e8b57",
+                            backgroundColor: "rgba(46,139,87,0.15)",
                             fill: true,
                             tension: 0.3
                         },
                         {
                             label: "NOK per Hour",
                             data: nokPerHour,
-                            borderColor: "red",
-                            backgroundColor: "rgba(255,0,0,0.1)",
+                            borderColor: "#ee1c25",
+                            backgroundColor: "rgba(238,28,37,0.15)",
                             fill: true,
                             tension: 0.3
                         }
@@ -242,8 +247,8 @@
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#eee" } },
-                    scales: { y: { beginAtZero: true, ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#aaa" }, grid: { color: "rgba(255,255,255,0.08)" } } }
+                    plugins: { title: { display: true, text: "OK vs NOK Trend Today", color: "#ffffff" } },
+                    scales: { y: { beginAtZero: true, ticks: { color: "#8a8a8a" }, grid: { color: "rgba(255,255,255,0.08)" } }, x: { ticks: { color: "#8a8a8a" }, grid: { color: "rgba(255,255,255,0.08)" } } }
                 }
             });
         }
@@ -268,8 +273,8 @@
                         {
                             label: "NOK per Hour",
                             data: nokPerHour,
-                            borderColor: "#9b1c1c",
-                            backgroundColor: "rgba(155,28,28,0.2)",
+                            borderColor: "#ee1c25",
+                            backgroundColor: "rgba(238,28,37,0.18)",
                             fill: true,
                             tension: 0.3
                         }
@@ -281,13 +286,13 @@
                     plugins: {
                         legend: {
                             labels: {
-                                color: "#eee",
+                                color: "#ffffff",
                             },
                         },
                         title: {
                             display: true,
                             text: "NOK Count per Hour",
-                            color: "#eee",
+                            color: "#ffffff",
                             font: {
                                 size: 18,
                             },
@@ -297,7 +302,7 @@
                         y: {
                             beginAtZero: true,
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -305,7 +310,7 @@
                         },
                         x: {
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -340,8 +345,8 @@
                         {
                             label: "Avg (ms)",
                             data: avgData,
-                            borderColor: "rgb(100, 160, 255)",
-                            backgroundColor: "rgba(100, 160, 255, 0.1)",
+                            borderColor: "rgba(255, 255, 255, 0.85)",
+                            backgroundColor: "rgba(255, 255, 255, 0.08)",
                             fill: false,
                             tension: 0.3,
                             borderWidth: 2
@@ -349,7 +354,7 @@
                         {
                             label: "Min (ms)",
                             data: minData,
-                            borderColor: "rgba(0, 200, 100, 0.7)",
+                            borderColor: "rgba(46, 139, 87, 0.8)",
                             backgroundColor: "transparent",
                             fill: false,
                             tension: 0.3,
@@ -359,7 +364,7 @@
                         {
                             label: "Max (ms)",
                             data: maxData,
-                            borderColor: "rgba(255, 100, 100, 0.7)",
+                            borderColor: "rgba(238, 28, 37, 0.75)",
                             backgroundColor: "transparent",
                             fill: false,
                             tension: 0.3,
@@ -374,13 +379,13 @@
                     plugins: {
                         legend: {
                             labels: {
-                                color: "#eee",
+                                color: "#ffffff",
                             },
                         },
                         title: {
                             display: true,
                             text: "Processing Speed (15-min intervals)",
-                            color: "#eee",
+                            color: "#ffffff",
                             font: {
                                 size: 18,
                             },
@@ -390,7 +395,7 @@
                         y: {
                             beginAtZero: true,
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -398,12 +403,12 @@
                             title: {
                                 display: true,
                                 text: "ms",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                         x: {
                             ticks: {
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                             grid: {
                                 color: "rgba(255,255,255,0.08)",
@@ -411,7 +416,7 @@
                             title: {
                                 display: true,
                                 text: "Time",
-                                color: "#aaa",
+                                color: "#8a8a8a",
                             },
                         },
                     },
@@ -508,6 +513,47 @@
             } catch (err) {
                 showRefreshError();
             }
+        }
+
+        // --- Export panel ---
+        const exportStartInput = document.getElementById("export-start");
+        const exportEndInput = document.getElementById("export-end");
+        const exportError = document.getElementById("exportError");
+        const btnExportCsv = document.getElementById("btn-export-csv");
+        const btnExportXlsx = document.getElementById("btn-export-xlsx");
+
+        function showExportError(message) {
+            if (!exportError) return;
+            exportError.textContent = message;
+            exportError.style.visibility = "visible";
+            setTimeout(() => { exportError.style.visibility = "hidden"; }, 4000);
+        }
+
+        // Default both date fields to the day currently shown on the dashboard
+        if (exportStartInput) exportStartInput.value = formatISODate(currentDate);
+        if (exportEndInput) exportEndInput.value = formatISODate(currentDate);
+
+        function triggerExport(format) {
+            const start = exportStartInput ? exportStartInput.value : "";
+            const end = exportEndInput ? exportEndInput.value : "";
+
+            if (!start || !end) {
+                showExportError("Pick both a start and end date first.");
+                return;
+            }
+
+            const url = `/analytics/export?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&format=${format}`;
+
+            // Native browser download via Content-Disposition: attachment,
+            // no need for a fetch+blob round trip.
+            window.location.href = url;
+        }
+
+        if (btnExportCsv) {
+            btnExportCsv.addEventListener("click", () => triggerExport("csv"));
+        }
+        if (btnExportXlsx) {
+            btnExportXlsx.addEventListener("click", () => triggerExport("xlsx"));
         }
 
         fetchData();

@@ -131,8 +131,37 @@ class TCPTriggerServer:
 
     def _trigger_vision_and_wait(self) -> bytes:
         """
-        Triggers vision processing and waits for the result to return a response byte.
+        Triggers vision processing and waits for the result to return a response.
+        A missing camera frame is treated as NOK for the PLC, but is recorded
+        separately as a camera-unavailable failure rather than being passed into
+        the vision pipeline.
         """
+        frame = self.camera.get_frame()
+        trigger_time = time.perf_counter()
+
+        if frame is None:
+            logger.warning(
+                "No frame available for TCP trigger; recording camera-unavailable NOK"
+            )
+
+            result = {
+                "status": "NOK",
+                "confidence": 0.0,
+                "detections": [],
+                "failure_reason": "camera_unavailable",
+            }
+
+            try:
+                self.process_result_fn(result, trigger_time)
+            except Exception as exc:
+                logger.error(
+                    "Failed to process camera-unavailable NOK result: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+            return self.response_nok
+
         result_holder = []
         done_event = threading.Event()
 
@@ -140,21 +169,63 @@ class TCPTriggerServer:
             result_holder.append(result)
             done_event.set()
 
-        frame = self.camera.get_frame()
-        if frame is None:
-            logger.warning("No frame available for TCP trigger")
+        try:
+            self.run_vision_fn(frame, callback=callback)
+        except Exception as exc:
+            logger.error(
+                "Failed to start vision processing for TCP trigger: %s",
+                exc,
+                exc_info=True,
+            )
+
+            result = {
+                "status": "NOK",
+                "confidence": 0.0,
+                "detections": [],
+                "failure_reason": "vision_start_failed",
+            }
+
+            try:
+                self.process_result_fn(result, trigger_time)
+            except Exception as process_exc:
+                logger.error(
+                    "Failed to process vision-start-failed NOK result: %s",
+                    process_exc,
+                    exc_info=True,
+                )
+
             return self.response_nok
 
-        trigger_time = time.perf_counter()
-        self.run_vision_fn(frame, callback=callback)
-
         done_event.wait(timeout=self.timeout_s)
+
         if not result_holder:
-            logger.warning("Vision timed out after %ss", self.timeout_s)
+            logger.warning(
+                "Vision timed out after %ss; recording timeout NOK",
+                self.timeout_s,
+            )
+
+            result = {
+                "status": "NOK",
+                "confidence": 0.0,
+                "detections": [],
+                "failure_reason": "vision_timeout",
+            }
+
+            try:
+                self.process_result_fn(result, trigger_time)
+            except Exception as exc:
+                logger.error(
+                    "Failed to process timeout NOK result: %s",
+                    exc,
+                    exc_info=True,
+                )
+
             return self.response_nok
 
         result = result_holder[0]
+
         self.process_result_fn(result, trigger_time)
+
         return self.response_ok if result.get("status") == "OK" else self.response_nok
 
     def is_enabled(self) -> bool:
