@@ -151,7 +151,7 @@ class AppState:
 
     def get_vision_mode(self) -> str:
         """
-        Gets the current vision mode (e.g., 'ocr', 'object_detection').
+        Gets the current vision mode (e.g., 'ocr', 'object_detection', 'ocread').
         """
         with self.lock:
             return self.vision_mode
@@ -161,7 +161,7 @@ class AppState:
         Sets the vision mode.
         """
         with self.lock:
-            if value in ("ocr", "object_detection"):
+            if value in ("ocr", "object_detection", "ocread"):
                 self.vision_mode = value
 
     def get_ocr_keyword(self) -> str:

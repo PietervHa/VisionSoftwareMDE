@@ -129,6 +129,30 @@ class TCPTriggerServer:
             finally:
                 logger.info("PLC disconnected: %s", addr)
 
+    def _build_response(self, result: dict) -> bytes:
+        """
+        Builds the byte response sent back to the PLC for a completed vision
+        cycle.
+
+        For "ocr" and "object_detection" modes this is the configured OK/NOK
+        byte string. For "ocread" no OK/NOK judgement is made here at all -
+        the raw recognized text is sent instead (newline-terminated) so the
+        PLC can run its own comparison against the expected value.
+        """
+        if result.get("mode") == "ocread" and not result.get("error"):
+            text = result.get("text")
+            if not text:
+                # Fall back to reconstructing from detections if "text" is
+                # missing for some reason (e.g. a non-standard OCR engine).
+                text = " ".join(
+                    str(d.get("text", ""))
+                    for d in result.get("detections", [])
+                    if isinstance(d, dict)
+                ).strip()
+            return (str(text) + "\n").encode("utf-8", errors="replace")
+
+        return self.response_ok if result.get("status") == "OK" else self.response_nok
+
     def _trigger_vision_and_wait(self) -> bytes:
         """
         Triggers vision processing and waits for the result to return a response.
@@ -226,7 +250,7 @@ class TCPTriggerServer:
 
         self.process_result_fn(result, trigger_time)
 
-        return self.response_ok if result.get("status") == "OK" else self.response_nok
+        return self._build_response(result)
 
     def is_enabled(self) -> bool:
         return self.enabled

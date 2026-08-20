@@ -157,7 +157,7 @@ def create_app(camera, app_state) -> FastAPI:
 
             frame_for_stream = frame
             roi = cfg.get("roi")
-            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr" and roi:
+            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() in ("ocr", "ocread") and roi:
                 # use shared draw_roi instead of inline _draw_roi helper
                 frame_for_stream = draw_roi(frame.copy(), roi)
 

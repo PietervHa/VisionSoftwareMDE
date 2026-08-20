@@ -170,8 +170,18 @@ def _normalize_result(result: dict, mode: str) -> dict:
     normalized["detections"] = _normalize_detections(normalized, mode)
     normalized["confidence"] = _extract_confidence(normalized)
 
-    threshold = _get_active_threshold()
     has_error = bool(normalized.get("error"))
+
+    if mode == "ocread":
+        # OCRead does not judge OK/NOK itself - the recognized text is sent
+        # to the PLC and compared there. "status" here only reflects whether
+        # the read cycle itself completed without error, not the outcome of
+        # a comparison, so the confidence threshold does not apply.
+        normalized["status"] = "NOK" if has_error else "OK"
+        normalized.setdefault("text", "")
+        return normalized
+
+    threshold = _get_active_threshold()
 
     if has_error:
         normalized["status"] = "NOK"
@@ -263,6 +273,12 @@ def run_vision(frame, callback=None, profile: bool = False):
             _run_with_callback(ocr_instance.run, frame, callback, mode="ocr", profile=profile)
             return None
         return _normalize_result(ocr_instance.run(frame, profile=profile), mode="ocr")
+
+    if mode == "ocread":
+        if callback:
+            _run_with_callback(ocr_instance.read, frame, callback, mode="ocread", profile=profile)
+            return None
+        return _normalize_result(ocr_instance.read(frame, profile=profile), mode="ocread")
 
     if mode == "object_detection":
         if callback:

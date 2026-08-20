@@ -2,7 +2,7 @@
 # Default configuration for the machine vision application
 
 # Top-level settings
-vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection"
+vision_mode: "ocr"  # valid values: "ocr" (default, backward compatible), "object_detection", "ocread"
 machine_id: "default"
 confidence_threshold: 0.8
 
@@ -28,6 +28,10 @@ ocr:
   whitelist: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789."
   disable_dawgs: true
   tesseract_path: "C:/Program Files/Tesseract-OCR/tesseract.exe"
+  # PaddleOCR only: initializes and runs the text-angle classifier so rotated
+  # or unevenly-oriented characters (e.g. dot-print/pin-stamped text) are
+  # rotated upright before recognition instead of being misread.
+  use_angle_cls: true
 
 # Camera settings
 camera:
@@ -114,9 +118,12 @@ trigger:
   host: "127.0.0.1"     # Local-only; change to 0.0.0.0 for a real PLC on the network
   port: 5001
   trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
-  response_ok: "OK\n"   # Response sent back on OK result
-  response_nok: "NOK\n" # Response sent back on NOK result
+  response_ok: "OK\n"   # Response sent back on OK result ("ocr" / "object_detection" modes)
+  response_nok: "NOK\n" # Response sent back on NOK result, and on any camera/vision failure
   timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
+  # In "ocread" mode no OK/NOK judgement is made here at all: the raw text
+  # read from the product is sent back instead (newline-terminated), and the
+  # PLC is responsible for comparing it against the expected value.
 
 # Security settings
 # Maintenance-mode login is per-user now (see the `users` table / QC_tools/manage_users.py),
