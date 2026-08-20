@@ -9,10 +9,15 @@ let DATASET_CAPTURE_ACTIVE = false;
 
 function updateVisionModeButtons() {
     const ocrBtn = document.getElementById("modeOcrBtn");
+    const ocreadBtn = document.getElementById("modeOcreadBtn");
     const objBtn = document.getElementById("modeObjBtn");
 
     if (ocrBtn) {
         ocrBtn.classList.toggle("active", VISION_MODE === "ocr");
+    }
+
+    if (ocreadBtn) {
+        ocreadBtn.classList.toggle("active", VISION_MODE === "ocread");
     }
 
     if (objBtn) {
@@ -32,9 +37,23 @@ async function updateResult() {
 
         const statusEl = document.getElementById("status");
         const detEl = document.getElementById("detections");
+        const detectionsHeadingEl = document.getElementById("detectionsHeading");
         const dynamicLabelEl = document.getElementById("dynamicLabel");
+        const ocreadTextSection = document.getElementById("ocreadTextSection");
+        const ocreadTextEl = document.getElementById("ocreadText");
 
-        if (result.status === "OK") {
+        if (VISION_MODE === "ocread") {
+            // OCRead doesn't judge OK/NOK itself - the PLC compares the read
+            // text - so the status here only reflects whether the read cycle
+            // completed, not a pass/fail verdict.
+            if (result.status === "OK") {
+                statusEl.textContent = "READ OK";
+                statusEl.className = "status ok";
+            } else {
+                statusEl.textContent = "READ FAILED";
+                statusEl.className = "status nok";
+            }
+        } else if (result.status === "OK") {
             statusEl.textContent = "OK";
             statusEl.className = "status ok";
         } else {
@@ -42,14 +61,18 @@ async function updateResult() {
             statusEl.className = "status nok";
         }
 
-        const noResultsText = VISION_MODE === "ocr"
+        const noResultsText = (VISION_MODE === "ocr" || VISION_MODE === "ocread")
             ? "No words detected"
             : "No objects detected";
+
+        if (detectionsHeadingEl) {
+            detectionsHeadingEl.textContent = VISION_MODE === "ocread" ? "Recognized Text" : "Detections";
+        }
 
         detEl.innerHTML = detections.length
             ? detections
                 .map(d => {
-                    const value = VISION_MODE === "ocr"
+                    const value = (VISION_MODE === "ocr" || VISION_MODE === "ocread")
                         ? (d.text || d.label || "-")
                         : (d.label || d.text || "-");
                     const confidence = Number(d.confidence ?? 0);
@@ -59,11 +82,19 @@ async function updateResult() {
             : noResultsText;
 
         if (dynamicLabelEl) {
+            dynamicLabelEl.style.display = VISION_MODE === "ocread" ? "none" : "";
             if (VISION_MODE === "ocr") {
                 dynamicLabelEl.textContent = result.searched_word || "-";
-            } else {
+            } else if (VISION_MODE !== "ocread") {
                 dynamicLabelEl.textContent = result.label || "-";
             }
+        }
+
+        if (ocreadTextSection) {
+            ocreadTextSection.style.display = VISION_MODE === "ocread" ? "block" : "none";
+        }
+        if (ocreadTextEl && VISION_MODE === "ocread") {
+            ocreadTextEl.textContent = result.text || "-";
         }
 
         const timeValue = result.cycle_time_ms || result.processing_time_ms || 0;
@@ -119,7 +150,7 @@ async function loadStatus() {
 }
 
 function getPollingIntervalMs() {
-    return VISION_MODE === "ocr" ? 100 : 500;
+    return (VISION_MODE === "ocr" || VISION_MODE === "ocread") ? 100 : 500;
 }
 
 async function startResultPolling() {
@@ -595,6 +626,11 @@ document.getElementById("startMaintenanceBtn").addEventListener("click", async (
 document.getElementById("modeOcrBtn").addEventListener("click", () => {
     if (CURRENT_MODE !== "maintenance") return;
     applyVisionMode("ocr");
+});
+
+document.getElementById("modeOcreadBtn").addEventListener("click", () => {
+    if (CURRENT_MODE !== "maintenance") return;
+    applyVisionMode("ocread");
 });
 
 document.getElementById("modeObjBtn").addEventListener("click", () => {
