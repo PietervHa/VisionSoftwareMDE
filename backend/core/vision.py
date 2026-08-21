@@ -173,12 +173,26 @@ def _normalize_result(result: dict, mode: str) -> dict:
     has_error = bool(normalized.get("error"))
 
     if mode == "ocread":
-        # OCRead does not judge OK/NOK itself - the recognized text is sent
-        # to the PLC and compared there. "status" here only reflects whether
-        # the read cycle itself completed without error, not the outcome of
-        # a comparison, so the confidence threshold does not apply.
-        normalized["status"] = "NOK" if has_error else "OK"
+        # OCRead's own status just reflects whether the product should be
+        # accepted or discarded before it even reaches the PLC comparison:
+        #   - no text read at all -> NOK, so the product gets rejected
+        #     immediately (bad print, empty/blank part, camera out of focus,
+        #     wrong angle, etc.)
+        #   - text was read (any text) -> OK; the PLC still does its own
+        #     comparison against the expected value.
+        # A technical failure (has_error) is NOT the same thing as "no text
+        # found" - it means the read cycle itself couldn't run - so it's
+        # kept NOK too but tagged with failure_reason for separate logging,
+        # the same convention used for camera_unavailable/vision_timeout/etc.
         normalized.setdefault("text", "")
+        if has_error:
+            normalized["status"] = "NOK"
+            normalized.setdefault("failure_reason", "ocr_engine_error")
+        elif not normalized["text"].strip() and not normalized["detections"]:
+            normalized["status"] = "NOK"
+            normalized.setdefault("failure_reason", "no_text_detected")
+        else:
+            normalized["status"] = "OK"
         return normalized
 
     threshold = _get_active_threshold()

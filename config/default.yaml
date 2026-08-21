@@ -8,9 +8,9 @@ confidence_threshold: 0.8
 
 # Region of Interest (ROI) settings
 roi:
-  x_start: 0.2
+  x_start: 0.33
   y_start: 0.7
-  x_end: 0.8
+  x_end: 0.66
   y_end: 0.9
 
 # OCR settings

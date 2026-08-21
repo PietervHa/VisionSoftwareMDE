@@ -42,18 +42,7 @@ async function updateResult() {
         const ocreadTextSection = document.getElementById("ocreadTextSection");
         const ocreadTextEl = document.getElementById("ocreadText");
 
-        if (VISION_MODE === "ocread") {
-            // OCRead doesn't judge OK/NOK itself - the PLC compares the read
-            // text - so the status here only reflects whether the read cycle
-            // completed, not a pass/fail verdict.
-            if (result.status === "OK") {
-                statusEl.textContent = "READ OK";
-                statusEl.className = "status ok";
-            } else {
-                statusEl.textContent = "READ FAILED";
-                statusEl.className = "status nok";
-            }
-        } else if (result.status === "OK") {
+        if (result.status === "OK") {
             statusEl.textContent = "OK";
             statusEl.className = "status ok";
         } else {
@@ -94,7 +83,18 @@ async function updateResult() {
             ocreadTextSection.style.display = VISION_MODE === "ocread" ? "block" : "none";
         }
         if (ocreadTextEl && VISION_MODE === "ocread") {
-            ocreadTextEl.textContent = result.text || "-";
+            if (result.status === "OK") {
+                ocreadTextEl.textContent = result.text || "-";
+            } else if (result.failure_reason === "no_text_detected") {
+                ocreadTextEl.textContent = "(no text detected)";
+            } else if (result.failure_reason) {
+                // Technical failure (camera unavailable, OCR engine error,
+                // timeout, ...) - kept visually distinct from a genuine
+                // "no text found" reject so an operator can tell the two apart.
+                ocreadTextEl.textContent = `(technical failure: ${result.failure_reason})`;
+            } else {
+                ocreadTextEl.textContent = "-";
+            }
         }
 
         const timeValue = result.cycle_time_ms || result.processing_time_ms || 0;
