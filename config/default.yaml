@@ -33,6 +33,62 @@ ocr:
   # rotated upright before recognition instead of being misread.
   use_angle_cls: true
 
+  # OCRead mode only: locates the printed text block via classical CV
+  # (dark-ink blob detection + clustering) and deskews it to horizontal
+  # before handing it to PaddleOCR, instead of relying on the static roi:
+  # box above - bottles don't land in the same position/orientation on the
+  # line, so a fixed box misses text as often as it catches it. See
+  # backend/detection/ocr/text_locator.py. If this stays disabled (or is
+  # missing), OCRead falls back to running OCR on the entire raw frame,
+  # which is far less reliable - watch the log for the
+  # "dynamic ROI disabled" warning if reads seem to be failing a lot.
+  dynamic_roi:
+    enabled: true
+
+    # Fraction-of-frame region to search within before any cropping -
+    # 0.0-1.0 on each edge. Leave as the full frame unless you know the
+    # text will never appear in some region (e.g. never in the top half),
+    # since narrowing this is a speed optimization, not a requirement.
+    search_roi:
+      x_start: 0.0
+      y_start: 0.0
+      x_end: 1.0
+      y_end: 1.0
+
+    # Blackhat morphology picks out dark ink on a lighter cap - kernel size
+    # should be a bit larger than the stroke width of a single character.
+    blackhat_kernel_size: 25
+    # Threshold on the blackhat response; a component must be at least this
+    # dark relative to its local background to count as ink.
+    blackhat_threshold: 25
+    # Morphological close kernel used to merge individual dots/pins of a
+    # dot-matrix character back into a single connected component before
+    # measuring component size. Wider than tall, since characters in a
+    # printed line are wider apart than a single character is tall.
+    morph_kernel_w: 9
+    morph_kernel_h: 5
+    # Component area bounds in pixels - filters out noise (too small) and
+    # mold lines/large shapes like the recycling triangle (too large).
+    min_component_area: 3
+    max_component_area: 2000
+    # A cluster of components only counts as "the text" once it has at
+    # least this many components (i.e. this many characters/dots found
+    # close together) - filters out stray noise clusters.
+    min_cluster_components: 4
+    # Max gap in pixels between components for them to be considered part
+    # of the same cluster/line.
+    cluster_max_gap_px: 25
+    # Padding in pixels added around the detected text block before
+    # cropping, so characters at the edge aren't clipped.
+    padding_px: 10
+
+    # Debug aid: when true, writes intermediate images (blackhat mask,
+    # detected bbox overlay, etc.) to debug_dir on every read - useful for
+    # tuning the thresholds above against real bottles, but leave off in
+    # normal production since it writes a file per cycle.
+    debug_save: false
+    debug_dir: "data/debug/dynamic_roi"
+
 # Camera settings
 camera:
   device_name: "DFK 22BUC03" # <--- Change this to your camera's device name, Thanks to Peter for the tip'

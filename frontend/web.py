@@ -157,7 +157,12 @@ def create_app(camera, app_state) -> FastAPI:
 
             frame_for_stream = frame
             roi = cfg.get("roi")
-            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() in ("ocr", "ocread") and roi:
+            # OCRead has no static ROI at all (see paddle_ocr.py _apply_roi) -
+            # it locates and deskews the text region fresh on every frame, so
+            # a fixed box here would be meaningless and wouldn't track what's
+            # actually being read. Only draw it for the plain "ocr" mode,
+            # which still uses the static box.
+            if cfg["hmi"]["debug_draw_roi"] and app_state.get_vision_mode() == "ocr" and roi:
                 # use shared draw_roi instead of inline _draw_roi helper
                 frame_for_stream = draw_roi(frame.copy(), roi)
 

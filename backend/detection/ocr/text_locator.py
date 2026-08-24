@@ -1,0 +1,328 @@
+"""
+backend/detection/ocr/text_locator.py
+
+Classical-CV dynamic text-region locator (OCRead mode only).
+
+The printed dot-matrix text on the bottle cap ("3030 22:42" / "BB 02/25")
+does not land in the same spot on every bottle, so a single static
+cfg["roi"] box misses it whenever the cap is rotated/placed differently
+under the camera. This module searches a (looser) region of the frame for
+the printed text and returns its bounding box, so the OCR crop always
+tracks the actual text instead of a fixed rectangle.
+
+No trained model involved. Two stages:
+
+1. Blackhat transform (cv2.MORPH_BLACKHAT) instead of a flat brightness
+   threshold. A flat "pixel below N is ink" threshold also picks up the
+   cap's embossed/molded features (the diagonal reinforcement ribs, the
+   recycling triangle, "PE/PA") because those catch shadow under angled
+   light and can be nearly as dark as the actual ink. Blackhat only
+   responds to features *smaller than its kernel* against a locally
+   brighter surround, so it suppresses the broad, large-scale shading of
+   the molded ribs while still picking out the small printed characters.
+2. Connected components on the blackhat result, then proximity-based
+   clustering (union-find): printed text is many small components sitting
+   close together, so the cluster with the most components (not simply
+   every surviving pixel unioned together) is taken as the text block.
+   This is what keeps stray specks - antialiasing on a mold line edge, a
+   dust fleck - from dragging the bounding box out to somewhere the text
+   isn't.
+
+Tunable entirely through cfg["ocr"]["dynamic_roi"] (see config/default.yaml).
+Returns None when nothing plausible is found, so the caller can fall back
+to the static ROI.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Optional
+
+import cv2
+import numpy as np
+
+from backend.utils.logger import get_logger
+from backend.utils.roi import roi_to_pixels
+
+log = get_logger(__name__)
+
+
+def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str] = None) -> Optional[dict]:
+    """
+    Find the printed-text block inside *frame*.
+
+    Args:
+        frame:   BGR frame (the full camera frame, not yet cropped to any ROI).
+        dyn_cfg: the ocr.dynamic_roi config dict.
+        debug_dir: if set, intermediate masks + the final bbox overlay are
+                   written here (mirrors the debug_ocr/ convention used
+                   elsewhere). Leave unset in production - this is for
+                   tuning the thresholds against real bottles.
+
+    Returns:
+        {"bbox": [x1, y1, x2, y2], "score": float} in *frame* pixel
+        coordinates, or None if no plausible text region was found.
+    """
+    t0 = time.perf_counter()
+    h, w = frame.shape[:2]
+
+    # Search within a coarse region rather than the whole frame - this is
+    # deliberately looser than the old static roi (enough to cover every
+    # position the cap can land in), but still narrows the search away
+    # from background/conveyor clutter outside the product itself.
+    search_roi = dyn_cfg.get("search_roi") or {"x_start": 0.0, "y_start": 0.0, "x_end": 1.0, "y_end": 1.0}
+    sx1, sy1, sx2, sy2 = roi_to_pixels(search_roi, w, h)
+    if sx2 <= sx1 or sy2 <= sy1:
+        sx1, sy1, sx2, sy2 = 0, 0, w, h
+
+    search = frame[sy1:sy2, sx1:sx2]
+    gray = cv2.cvtColor(search, cv2.COLOR_BGR2GRAY) if search.ndim == 3 else search
+
+    # Blackhat = closing(gray) - gray. Highlights small dark features
+    # against a locally brighter background and largely cancels out broad,
+    # slowly-varying shading (the molded ribs/triangle) because closing
+    # "fills those in" along with the true background before subtracting.
+    blackhat_kernel_size = int(dyn_cfg.get("blackhat_kernel_size", 25))
+    blackhat_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (max(1, blackhat_kernel_size), max(1, blackhat_kernel_size))
+    )
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, blackhat_kernel)
+
+    blackhat_threshold = int(dyn_cfg.get("blackhat_threshold", 25))
+    _, dark_mask = cv2.threshold(blackhat, blackhat_threshold, 255, cv2.THRESH_BINARY)
+
+    # Small closing to merge dot-matrix fragments belonging to the same
+    # character - deliberately much smaller than the blackhat kernel so it
+    # doesn't re-bridge the gap back to the molded ribs.
+    close_w = int(dyn_cfg.get("morph_kernel_w", 9))
+    close_h = int(dyn_cfg.get("morph_kernel_h", 5))
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(1, close_w), max(1, close_h)))
+    closed = cv2.morphologyEx(dark_mask, cv2.MORPH_CLOSE, close_kernel)
+
+    min_area = float(dyn_cfg.get("min_component_area", 3))
+    max_area = float(dyn_cfg.get("max_component_area", 2000))
+
+    num_labels, _labels, stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+
+    boxes = []
+    for i in range(1, num_labels):  # label 0 is background
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < min_area or area > max_area:
+            continue
+        x = stats[i, cv2.CC_STAT_LEFT]
+        y = stats[i, cv2.CC_STAT_TOP]
+        cw = stats[i, cv2.CC_STAT_WIDTH]
+        ch = stats[i, cv2.CC_STAT_HEIGHT]
+        boxes.append((x, y, x + cw, y + ch))
+
+    if debug_dir:
+        _write_debug(debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
+
+    min_components = int(dyn_cfg.get("min_cluster_components", 4))
+    cluster = _largest_proximity_cluster(boxes, max_gap=float(dyn_cfg.get("cluster_max_gap_px", 25)))
+
+    if not cluster or len(cluster) < min_components:
+        log.debug(
+            "text_locator: no plausible text cluster (total_components=%s best_cluster=%s, need>=%s)",
+            len(boxes), len(cluster) if cluster else 0, min_components,
+        )
+        return None
+
+    xs1 = min(boxes[i][0] for i in cluster)
+    ys1 = min(boxes[i][1] for i in cluster)
+    xs2 = max(boxes[i][2] for i in cluster)
+    ys2 = max(boxes[i][3] for i in cluster)
+
+    padding = int(dyn_cfg.get("padding_px", 10))
+    xs1 = max(0, xs1 - padding)
+    ys1 = max(0, ys1 - padding)
+    xs2 = min(search.shape[1], xs2 + padding)
+    ys2 = min(search.shape[0], ys2 + padding)
+
+    # Translate from search-crop coordinates back to full-frame coordinates.
+    bbox = [sx1 + xs1, sy1 + ys1, sx1 + xs2, sy1 + ys2]
+
+    if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+        return None
+
+    # Rotated (minimum-area) rect around the cluster, in addition to the
+    # axis-aligned bbox above. The axis-aligned box only tells the caller
+    # *where* the text is - it doesn't help when the cap (and therefore the
+    # printed line) is rotated under the camera, since the crop still hands
+    # OCR a diagonal line of text instead of a horizontal one. The rotated
+    # rect captures the actual orientation of the printed line so the
+    # caller can deskew it before running OCR - see deskew_crop() below.
+    points = np.array(
+        [[boxes[i][0], boxes[i][1]] for i in cluster]
+        + [[boxes[i][2], boxes[i][1]] for i in cluster]
+        + [[boxes[i][0], boxes[i][3]] for i in cluster]
+        + [[boxes[i][2], boxes[i][3]] for i in cluster],
+        dtype=np.float32,
+    )
+    (rcx, rcy), (rw, rh), angle = cv2.minAreaRect(points)
+
+    # minAreaRect doesn't know which side is the text baseline - normalize
+    # so the box is always "landscape" (width = baseline direction). Without
+    # this, a near-vertical line of text would keep its short side reported
+    # as width, and downstream deskewing would rotate it 90 degrees the
+    # wrong way.
+    if rw < rh:
+        rw, rh = rh, rw
+        angle += 90.0
+
+    rw += 2 * padding
+    rh += 2 * padding
+
+    rotated_rect = {
+        "center": [sx1 + float(rcx), sy1 + float(rcy)],
+        "size": [float(rw), float(rh)],
+        "angle": float(angle),
+    }
+
+    # Simple confidence proxy: how many components formed the winning
+    # cluster relative to a "plenty of characters" reference count.
+    score = min(1.0, len(cluster) / 20.0)
+    duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+    log.debug(
+        "text_locator: found bbox=%s rotated_rect=%s cluster_components=%s score=%.3f (%sms)",
+        bbox, rotated_rect, len(cluster), score, duration_ms,
+    )
+
+    if debug_dir:
+        annotated = frame.copy()
+        cv2.rectangle(annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 2)
+        box_pts = cv2.boxPoints(((rotated_rect["center"][0], rotated_rect["center"][1]), (rw, rh), angle))
+        cv2.drawContours(annotated, [np.intp(box_pts)], 0, (0, 255, 0), 2)
+        _write_debug(debug_dir, bbox_overlay=annotated)
+
+    return {"bbox": bbox, "rotated_rect": rotated_rect, "score": score}
+
+
+def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0) -> Optional[np.ndarray]:
+    """
+    Straighten and crop *frame* to the rotated rect returned by
+    locate_text_region(), so the printed line comes out horizontal
+    regardless of how the cap was rotated under the camera.
+
+    Approach: crop a generous axis-aligned margin around the rotated rect
+    first (cheap), rotate only that small sub-image (not the full frame),
+    then take the final tight crop out of the rotated sub-image. Rotating
+    the whole frame for every read would work too but costs much more for
+    no benefit, since we only ever want the pixels near the rect.
+
+    Note on orientation: minAreaRect's angle is only defined up to 180
+    degrees, so this can hand back text that reads correctly but is
+    upside-down in the frame. That residual 0/180 ambiguity is exactly
+    what PaddleOCR's use_angle_cls is for - it classifies coarse
+    orientation, it isn't meant to correct arbitrary continuous rotation
+    on its own. The two stages are complementary: this function handles
+    "which way is the text tilted", angle_cls handles "is it upside down".
+
+    Returns None if the rect is degenerate or falls entirely outside frame.
+    """
+    h, w = frame.shape[:2]
+    cx, cy = rotated_rect["center"]
+    rw, rh = rotated_rect["size"]
+    angle = rotated_rect["angle"]
+
+    rw += 2 * extra_padding_px
+    rh += 2 * extra_padding_px
+
+    if rw <= 1 or rh <= 1:
+        return None
+
+    # Axis-aligned margin big enough to contain the rotated rect at any
+    # angle: half the rect's diagonal in every direction from its center.
+    diag = int(np.ceil(((rw ** 2 + rh ** 2) ** 0.5) / 2)) + 2
+    mx1, my1 = int(cx - diag), int(cy - diag)
+    mx2, my2 = int(cx + diag), int(cy + diag)
+    mx1c, my1c = max(0, mx1), max(0, my1)
+    mx2c, my2c = min(w, mx2), min(h, my2)
+
+    if mx2c <= mx1c or my2c <= my1c:
+        return None
+
+    margin = frame[my1c:my2c, mx1c:mx2c]
+
+    # Center relative to the margin crop (not the full frame) now that
+    # we've clamped to frame bounds.
+    local_cx = cx - mx1c
+    local_cy = cy - my1c
+
+    mh, mw = margin.shape[:2]
+    M = cv2.getRotationMatrix2D((local_cx, local_cy), angle, 1.0)
+    rotated = cv2.warpAffine(margin, M, (mw, mh), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+    x1 = int(round(local_cx - rw / 2))
+    y1 = int(round(local_cy - rh / 2))
+    x2 = int(round(local_cx + rw / 2))
+    y2 = int(round(local_cy + rh / 2))
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(mw, x2), min(mh, y2)
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return rotated[y1:y2, x1:x2]
+
+
+def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
+    """
+    Groups boxes via union-find, connecting any two whose gap (edge-to-edge
+    distance) is <= max_gap, and returns the indices of the largest group
+    by component count.
+
+    Printed text is several small components (digits, punctuation) sitting
+    close together; picking the cluster with the most members - rather
+    than unioning every surviving component in the frame - is what keeps
+    isolated noise specks from dragging the final bbox somewhere the text
+    isn't.
+    """
+    n = len(boxes)
+    if n == 0:
+        return []
+
+    parent = list(range(n))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    def gap(b1, b2) -> float:
+        x1a, y1a, x2a, y2a = b1
+        x1b, y1b, x2b, y2b = b2
+        dx = max(x1a - x2b, x1b - x2a, 0)
+        dy = max(y1a - y2b, y1b - y2a, 0)
+        if dx == 0 or dy == 0:
+            return float(max(dx, dy))
+        return float((dx ** 2 + dy ** 2) ** 0.5)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if gap(boxes[i], boxes[j]) <= max_gap:
+                union(i, j)
+
+    clusters: dict = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(i)
+
+    return max(clusters.values(), key=len)
+
+
+def _write_debug(debug_dir: str, **named_images) -> None:
+    """Best-effort dump of intermediate images for threshold tuning."""
+    import os
+
+    try:
+        os.makedirs(debug_dir, exist_ok=True)
+        for name, img in named_images.items():
+            cv2.imwrite(os.path.join(debug_dir, f"text_locator_{name}.png"), img)
+    except Exception as exc:  # pragma: no cover - debug aid only, never fatal
+        log.warning("text_locator debug write failed (non-fatal): %s", exc)

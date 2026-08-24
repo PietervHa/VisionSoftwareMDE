@@ -5,6 +5,7 @@ Provides the PaddleOCR class for text recognition using the PaddleOCR engine.
 """
 
 import cv2
+import numpy as np
 import re
 import time
 import logging
@@ -13,6 +14,7 @@ from backend.detection.ocr.paddle_worker import PaddleOCRWorker
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
+from backend.detection.ocr.text_locator import locate_text_region, deskew_crop
 
 log = get_logger(__name__)
 
@@ -39,6 +41,16 @@ class PaddleOCR:
         self.preprocess_mode = ocr_cfg["preprocess"].lower()
         self.downscale = float(ocr_cfg["downscale"])
         self.min_dim = int(ocr_cfg["min_dim"])
+
+        # Dynamic ROI (OCRead mode only): locates the printed text block via
+        # classical CV instead of relying on the static cfg["roi"] box, since
+        # the text doesn't land in the same place on every bottle. See
+        # text_locator.py. Falls back to the static ROI when disabled or
+        # when nothing is found on a given frame.
+        dynamic_roi_cfg = ocr_cfg.get("dynamic_roi", {}) if isinstance(ocr_cfg.get("dynamic_roi"), dict) else {}
+        self.dynamic_roi_enabled = bool(dynamic_roi_cfg.get("enabled", False))
+        self.dynamic_roi_cfg = dynamic_roi_cfg
+        self.dynamic_roi_debug_dir = dynamic_roi_cfg.get("debug_dir") if dynamic_roi_cfg.get("debug_save") else None
 
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
@@ -93,12 +105,51 @@ class PaddleOCR:
         new_h = max(1, int(round(h * scale)))
         return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    def _apply_roi(self, frame):
-        """Crop the frame to the configured ROI, optionally drawing the debug overlay.
+    def _apply_roi(self, frame, dynamic=False):
+        """Crop the frame to the text region.
 
-        delegates to shared roi utility instead of duplicating the
-        coordinate math that also lives in web.py and tesseract_ocr.py.
+        dynamic=True is the OCRead-mode path, and it never touches
+        cfg["roi"]. It only ever does one of two things: crop to wherever
+        locate_text_region() actually found ink on this frame (deskewed via
+        deskew_crop), or - if it found nothing at all - hand the full,
+        uncropped frame to OCR rather than guessing a fixed rectangle. A
+        production line where bottles don't land the same way every time
+        means a static box is wrong as often as it's right, so there is no
+        static-ROI fallback in this path at all. No debug overlay is drawn
+        here either - the detected region changes on every frame, so a box
+        drawn on the live view wouldn't mean anything to line staff.
+
+        dynamic=False (the plain "ocr" keyword-match mode) is unrelated to
+        OCRead and still uses the static cfg["roi"] box, via the shared roi
+        utility so the coordinate math isn't duplicated across web.py /
+        tesseract_ocr.py.
         """
+        if dynamic:
+            if not self.dynamic_roi_enabled:
+                log.warning(
+                    "OCRead called with dynamic ROI disabled (ocr.dynamic_roi.enabled=false) - "
+                    "running OCR on the full frame. Enable it in config to locate text automatically."
+                )
+                return frame
+
+            located = locate_text_region(frame, self.dynamic_roi_cfg, debug_dir=self.dynamic_roi_debug_dir)
+            if not located:
+                log.debug("Dynamic ROI: no text region found on this frame - running OCR on the full frame.")
+                return frame
+
+            rotated_rect = located.get("rotated_rect")
+            crop = deskew_crop(frame, rotated_rect) if rotated_rect else None
+            if crop is None:
+                # Degenerate rotated rect (shouldn't normally happen) - use
+                # the axis-aligned box we already computed rather than the
+                # full frame, since we did find *something*.
+                x1, y1, x2, y2 = located["bbox"]
+                crop = frame[y1:y2, x1:x2]
+
+            return crop
+
+        # Static-ROI path: only reached from run() (the "ocr" keyword mode).
+        # read() (OCRead) always passes dynamic=True and never gets here.
         roi = cfg.get("roi")
         if not roi:
             return frame
@@ -108,19 +159,20 @@ class PaddleOCR:
 
         return apply_roi(frame, roi)
 
-    def _recognize(self, frame, profile=False):
+    def _recognize(self, frame, profile=False, dynamic_roi=False):
         """
         Shared pipeline: ROI, downscale, and the actual PaddleOCR inference call.
 
         Returns every text candidate PaddleOCR produced (unfiltered), along
         with timing info. Both `run()` (keyword match, for the OCR mode) and
         `read()` (raw read-out, for the OCRead mode) build on this so the
-        ROI/preprocessing/inference path is identical between the two modes.
+        downscale/preprocessing/inference path is identical between the two
+        modes — only the ROI step differs, via dynamic_roi (OCRead only).
         """
         profile_data = {} if profile else None
 
         t0 = time.perf_counter()
-        roi_frame = self._apply_roi(frame)
+        roi_frame = self._apply_roi(frame, dynamic=dynamic_roi)
         if profile_data is not None:
             profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
@@ -227,8 +279,12 @@ class PaddleOCR:
         Used by the OCRead mode: the comparison against the expected text is
         made on the PLC, not here, so nothing is filtered out or judged
         OK/NOK - the raw read-out is simply reported back.
+
+        Uses the dynamic (classical-CV) ROI locator when enabled, since
+        this is the mode that needs to track the text wherever it actually
+        printed on each bottle - see _apply_roi().
         """
-        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile, dynamic_roi=True)
 
         processing_time_ms = round(elapsed_ms, 1)
         full_text = " ".join(c["text"] for c in candidates).strip()
