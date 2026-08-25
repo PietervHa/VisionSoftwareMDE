@@ -102,9 +102,10 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     min_area = float(dyn_cfg.get("min_component_area", 3))
     max_area = float(dyn_cfg.get("max_component_area", 2000))
 
-    num_labels, _labels, stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+    num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
 
     boxes = []
+    label_ids = []
     for i in range(1, num_labels):  # label 0 is background
         area = stats[i, cv2.CC_STAT_AREA]
         if area < min_area or area > max_area:
@@ -114,6 +115,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         cw = stats[i, cv2.CC_STAT_WIDTH]
         ch = stats[i, cv2.CC_STAT_HEIGHT]
         boxes.append((x, y, x + cw, y + ch))
+        label_ids.append(i)
 
     if debug_dir:
         _write_debug(debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
@@ -152,13 +154,35 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     # OCR a diagonal line of text instead of a horizontal one. The rotated
     # rect captures the actual orientation of the printed line so the
     # caller can deskew it before running OCR - see deskew_crop() below.
-    points = np.array(
-        [[boxes[i][0], boxes[i][1]] for i in cluster]
-        + [[boxes[i][2], boxes[i][1]] for i in cluster]
-        + [[boxes[i][0], boxes[i][3]] for i in cluster]
-        + [[boxes[i][2], boxes[i][3]] for i in cluster],
-        dtype=np.float32,
-    )
+    #
+    # Fit to the actual ink pixels of the winning cluster, NOT to each
+    # component's axis-aligned box corners. A rotated blob's axis-aligned
+    # box over-estimates its true footprint by up to ~2x right around 45
+    # degrees (and not at all at 0/90/180/270, where "rotated" and
+    # "axis-aligned" coincide) - averaged over a whole cluster of
+    # characters, that inflation was biasing/destabilizing the fitted
+    # rectangle specifically at the angles between the cardinal points.
+    # Fitting to real pixels removes that bias entirely, at any angle.
+    cluster_label_ids = np.array([label_ids[i] for i in cluster])
+    sub_labels = labels[ys1:ys2, xs1:xs2]
+    ink_mask = np.isin(sub_labels, cluster_label_ids).astype(np.uint8)
+    ink_points = cv2.findNonZero(ink_mask)
+
+    if ink_points is not None and len(ink_points) >= 3:
+        points = ink_points.reshape(-1, 2).astype(np.float32)
+        points[:, 0] += xs1
+        points[:, 1] += ys1
+    else:
+        # Degenerate fallback (shouldn't normally happen - the cluster
+        # already passed the min_cluster_components check) - AABB corners
+        # are still a valid, if less precise, rect.
+        points = np.array(
+            [[boxes[i][0], boxes[i][1]] for i in cluster]
+            + [[boxes[i][2], boxes[i][1]] for i in cluster]
+            + [[boxes[i][0], boxes[i][3]] for i in cluster]
+            + [[boxes[i][2], boxes[i][3]] for i in cluster],
+            dtype=np.float32,
+        )
     (rcx, rcy), (rw, rh), angle = cv2.minAreaRect(points)
 
     # minAreaRect doesn't know which side is the text baseline - normalize
