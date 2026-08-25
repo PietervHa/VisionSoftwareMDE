@@ -69,8 +69,18 @@ ocr:
     morph_kernel_h: 5
     # Component area bounds in pixels - filters out noise (too small) and
     # mold lines/large shapes like the recycling triangle (too large).
+    # 9000 rather than a value tight to the dot-matrix code specifically:
+    # bold/larger printed text (e.g. a "Made in Germany" declaration, a
+    # product nameplate) produces bigger merged letter-blobs after the
+    # closing step above - a tighter ceiling silently discards that text
+    # entirely rather than just narrowing in on the dot-matrix code, which
+    # then leaves whatever else is left in frame (e.g. a barcode) to win
+    # the clustering step by default. The molded ribs/triangle on the cap
+    # itself are excluded by the blackhat step already (it cancels broad,
+    # slowly-varying shading), not by this ceiling - confirmed the same
+    # bottle-cap component count at 2000 and at 9000.
     min_component_area: 3
-    max_component_area: 2000
+    max_component_area: 9000
     # A cluster of components only counts as "the text" once it has at
     # least this many components (i.e. this many characters/dots found
     # close together) - filters out stray noise clusters.

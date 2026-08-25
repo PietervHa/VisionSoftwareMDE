@@ -204,11 +204,21 @@ def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0
     locate_text_region(), so the printed line comes out horizontal
     regardless of how the cap was rotated under the camera.
 
-    Approach: crop a generous axis-aligned margin around the rotated rect
-    first (cheap), rotate only that small sub-image (not the full frame),
-    then take the final tight crop out of the rotated sub-image. Rotating
-    the whole frame for every read would work too but costs much more for
-    no benefit, since we only ever want the pixels near the rect.
+    Fast path: if the rect is already axis-aligned to within
+    ANGLE_SNAP_TOLERANCE_DEG (the common case on a line where bottles land
+    close to upright, not rotated by a large angle every cycle), this skips
+    rotation entirely and takes a direct pixel slice instead. warpAffine
+    always resamples the image, even for a 1-degree rotation, which softens
+    fine dot-matrix stroke edges for no real benefit when there's nothing
+    meaningful to straighten - the fast path keeps those frames exactly as
+    sharp as a plain static-ROI crop.
+
+    For everything else: crop a generous axis-aligned margin around the
+    rotated rect first (cheap), rotate only that small sub-image (not the
+    full frame), then take the final tight crop out of the rotated
+    sub-image. Rotating the whole frame for every read would work too but
+    costs much more for no benefit, since we only ever want the pixels near
+    the rect.
 
     Note on orientation: minAreaRect's angle is only defined up to 180
     degrees, so this can hand back text that reads correctly but is
@@ -220,6 +230,8 @@ def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0
 
     Returns None if the rect is degenerate or falls entirely outside frame.
     """
+    ANGLE_SNAP_TOLERANCE_DEG = 1.5
+
     h, w = frame.shape[:2]
     cx, cy = rotated_rect["center"]
     rw, rh = rotated_rect["size"]
@@ -230,6 +242,18 @@ def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0
 
     if rw <= 1 or rh <= 1:
         return None
+
+    angle_from_axis = min(abs(angle) % 180, 180 - (abs(angle) % 180))
+    if angle_from_axis <= ANGLE_SNAP_TOLERANCE_DEG:
+        x1 = int(round(cx - rw / 2))
+        y1 = int(round(cy - rh / 2))
+        x2 = int(round(cx + rw / 2))
+        y2 = int(round(cy + rh / 2))
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return frame[y1:y2, x1:x2]
 
     # Axis-aligned margin big enough to contain the rotated rect at any
     # angle: half the rect's diagonal in every direction from its center.
