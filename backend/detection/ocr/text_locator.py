@@ -35,6 +35,7 @@ to the static ROI.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
@@ -65,6 +66,17 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     """
     t0 = time.perf_counter()
     h, w = frame.shape[:2]
+
+    # Each call gets its own timestamped subfolder rather than writing to
+    # fixed filenames directly in debug_dir - otherwise every cycle
+    # overwrites the previous one's images, which makes this useless for
+    # reviewing a session where you're rotating a bottle through several
+    # angles (you'd only ever see whatever cycle happened to run last).
+    cycle_debug_dir = None
+    if debug_dir:
+        import datetime
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        cycle_debug_dir = os.path.join(debug_dir, stamp)
 
     # Search within a coarse region rather than the whole frame - this is
     # deliberately looser than the old static roi (enough to cover every
@@ -118,7 +130,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         label_ids.append(i)
 
     if debug_dir:
-        _write_debug(debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
+        _write_debug(cycle_debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
 
     min_components = int(dyn_cfg.get("min_cluster_components", 4))
     cluster = _largest_proximity_cluster(boxes, max_gap=float(dyn_cfg.get("cluster_max_gap_px", 25)))
@@ -217,7 +229,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         cv2.rectangle(annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 2)
         box_pts = cv2.boxPoints(((rotated_rect["center"][0], rotated_rect["center"][1]), (rw, rh), angle))
         cv2.drawContours(annotated, [np.intp(box_pts)], 0, (0, 255, 0), 2)
-        _write_debug(debug_dir, bbox_overlay=annotated)
+        _write_debug(cycle_debug_dir, bbox_overlay=annotated)
 
     return {"bbox": bbox, "rotated_rect": rotated_rect, "score": score}
 
@@ -366,8 +378,6 @@ def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
 
 def _write_debug(debug_dir: str, **named_images) -> None:
     """Best-effort dump of intermediate images for threshold tuning."""
-    import os
-
     try:
         os.makedirs(debug_dir, exist_ok=True)
         for name, img in named_images.items():
