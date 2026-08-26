@@ -170,7 +170,12 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         _write_debug(cycle_debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
 
     min_components = int(dyn_cfg.get("min_cluster_components", 4))
-    cluster = _largest_proximity_cluster(boxes, max_gap=float(dyn_cfg.get("cluster_max_gap_px", 25)))
+    # First pass: tight, isotropic clustering. This is deliberately
+    # conservative (small gap) so it never bridges to unrelated debris -
+    # it's just finding a reliable "seed" that's definitely part of the
+    # real text.
+    seed_gap = float(dyn_cfg.get("cluster_max_gap_px", 25))
+    cluster = _largest_proximity_cluster(boxes, max_gap=seed_gap)
 
     if not cluster or len(cluster) < min_components:
         log.debug(
@@ -178,6 +183,25 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
             len(boxes), len(cluster) if cluster else 0, min_components,
         )
         return None
+
+    # Second pass: extend the seed along its own line direction, not just
+    # isotropically. A rotated line of text has characters that are normal
+    # spacing apart *along the baseline* but end up far apart in raw x/y
+    # terms, since that spacing splits across both axes - the seed gap
+    # above has to stay tight to avoid bridging to nearby noise (a rib
+    # fragment, embossed lettering), which means it can under-cluster a
+    # rotated line and clip off the tail end of it. Fitting a line through
+    # the seed and only pulling in components that are both nearly on that
+    # line (small perpendicular distance) and a plausible continuation of
+    # it (not off in some unrelated direction) recovers the rest of the
+    # line without reopening the door to unrelated clutter, since that
+    # clutter essentially never sits precisely on the text's own line.
+    cluster = _extend_cluster_along_line(
+        boxes,
+        cluster,
+        max_perp_dist=float(dyn_cfg.get("line_extend_max_perp_px", 18)),
+        max_along_gap=float(dyn_cfg.get("line_extend_max_gap_px", 90)),
+    )
 
     xs1 = min(boxes[i][0] for i in cluster)
     ys1 = min(boxes[i][1] for i in cluster)
@@ -361,6 +385,56 @@ def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0
         return None
 
     return rotated[y1:y2, x1:x2]
+
+
+def _extend_cluster_along_line(boxes: list, seed: list, max_perp_dist: float, max_along_gap: float) -> list:
+    """
+    Grow a seed cluster by pulling in components that lie close to the
+    seed's own line direction, even if they're farther away than the tight
+    seed-clustering gap would normally allow.
+
+    Fits a line through the seed's box centroids via PCA (robust to any
+    angle, including near-vertical, unlike a plain x-on-y or y-on-x fit),
+    then includes any other component whose centroid is within
+    max_perp_dist of that line AND within max_along_gap of the seed's own
+    extent measured along the line. Both conditions matter: perpendicular
+    distance alone would still accept something far past the end of the
+    real text if it happened to be collinear by coincidence, and the along
+    gap alone would accept something off to the side. Requiring both is
+    what lets this stay generous along the text's own direction while
+    staying strict in every other direction.
+    """
+    if len(seed) < 2:
+        return seed
+
+    seed_set = set(seed)
+    centroids = np.array([[(boxes[i][0] + boxes[i][2]) / 2, (boxes[i][1] + boxes[i][3]) / 2] for i in seed])
+    mean = centroids.mean(axis=0)
+    centered = centroids - mean
+    _, _, vt = np.linalg.svd(centered)
+    direction = vt[0]  # principal axis unit vector
+
+    def project(pt):
+        d = pt - mean
+        along = float(np.dot(d, direction))
+        perp = float(np.linalg.norm(d - along * direction))
+        return along, perp
+
+    seed_alongs = [project(c)[0] for c in centroids]
+    lo, hi = min(seed_alongs), max(seed_alongs)
+
+    extended = list(seed)
+    for i, box in enumerate(boxes):
+        if i in seed_set:
+            continue
+        cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+        along, perp = project(np.array([cx, cy]))
+        if perp > max_perp_dist:
+            continue
+        if lo - max_along_gap <= along <= hi + max_along_gap:
+            extended.append(i)
+
+    return extended
 
 
 def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
