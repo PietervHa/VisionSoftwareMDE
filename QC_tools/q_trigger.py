@@ -26,6 +26,7 @@ Two trigger methods are supported:
 
 Standalone usage:
    python -m QC_tools.q_trigger              # tcp mode (default)
+   python -m QC_tools.q_trigger --delay 1 --interval 1 --hours 0.33 ->example of modified command
    python -m QC_tools.q_trigger --mode keyboard
 
 From the main application:

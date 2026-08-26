@@ -357,33 +357,6 @@ class PaddleOCR:
             log.warning("OCR result debug write failed (non-fatal): %s", exc)
 
     @staticmethod
-    def _parse_paddle_results(results):
-        """Flattens PaddleOCR's raw .ocr() return value into the
-        {"text", "confidence"} candidate list shape used everywhere else in
-        this class. Factored out of _recognize() so the orientation retry
-        (a second .ocr() call on a flipped crop, see _recognize()) can
-        parse its result the same way without duplicating this loop.
-        """
-        candidates = []
-        if not results:
-            return candidates
-        for page_results in results:
-            if not page_results:
-                continue
-            for item in page_results:
-                if not isinstance(item, (list, tuple)) or len(item) < 2:
-                    continue
-                rec = item[1]
-                if not isinstance(rec, (list, tuple)) or len(rec) < 2:
-                    continue
-                text = rec[0]
-                score = rec[1]
-                if not text.strip():
-                    continue
-                candidates.append({"text": text, "confidence": round(float(score), 3)})
-        return candidates
-
-    @staticmethod
     def _score_candidates(candidates):
         """Aggregate confidence score used to compare two candidate sets
         (a crop vs its 180-degree-rotated twin, see _recognize()'s
@@ -442,17 +415,20 @@ class PaddleOCR:
 
         t2 = start_time
         try:
-            results = self._paddle.ocr(roi_frame)
+            # paddle_worker.py parses PaddleOCR's own result object inside
+            # the worker process now (see its module docstring) and hands
+            # back a plain list of {"text", "confidence"} dicts - nothing
+            # further to unpack here regardless of which PaddleOCR version
+            # produced it.
+            candidates = self._paddle.ocr(roi_frame) or []
             if debug_enabled:
-                log.debug("PaddleOCR result pages=%s", len(results) if results else 0)
+                log.debug("PaddleOCR result count=%s", len(candidates))
         except Exception as e:
             log.error("PaddleOCR.ocr() failed: %s", e, exc_info=True)
-            results = None
+            candidates = []
 
         if profile_data is not None:
             profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
-
-        candidates = self._parse_paddle_results(results)
 
         # Orientation retry - see the docstring above and the comment
         # above self.orientation_retry_enabled in __init__. Only pays for
@@ -468,8 +444,7 @@ class PaddleOCR:
                 flipped_frame = None
                 try:
                     flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
-                    flipped_results = self._paddle.ocr(flipped_frame)
-                    flipped_candidates = self._parse_paddle_results(flipped_results)
+                    flipped_candidates = self._paddle.ocr(flipped_frame) or []
                 except Exception as exc:
                     log.warning("Orientation retry failed (non-fatal): %s", exc)
                 if profile_data is not None:
