@@ -52,13 +52,56 @@ class PaddleOCR:
         self.dynamic_roi_cfg = dynamic_roi_cfg
         self.dynamic_roi_debug_dir = dynamic_roi_cfg.get("debug_dir") if dynamic_roi_cfg.get("debug_save") else None
 
+        # Rib inpainting (OCRead / dynamic ROI only): on this cap, the
+        # mold rib crosses directly through the same 1-2 leading
+        # characters of the printed line on almost every cycle, because
+        # the rib position and the print position never move relative to
+        # each other - confirmed against real debug captures, not a
+        # hypothetical. text_locator.py already detects+erases rib lines,
+        # but only inside the *clustering* mask used to locate the text -
+        # the rib pixels are still physically present in the crop that
+        # actually gets handed to the recognizer. This re-detects long
+        # straight lines directly on the deskewed crop and inpaints over
+        # them before recognition, instead of just working around the rib
+        # during localization.
+        #
+        # Off by default - validate against dynamic_roi.debug_save
+        # captures on your own frames before trusting this in production.
+        # See _derib_crop() for why the thresholds need checking against
+        # real crops rather than assumed safe.
+        self.derib_enabled = bool(dynamic_roi_cfg.get("derib_enabled", False))
+        self.derib_blackhat_kernel = int(dynamic_roi_cfg.get("derib_blackhat_kernel", 25))
+        self.derib_threshold = int(dynamic_roi_cfg.get("derib_threshold", 32))
+        self.derib_min_length_frac = float(dynamic_roi_cfg.get("derib_min_length_frac", 0.6))
+        self.derib_thickness = int(dynamic_roi_cfg.get("derib_thickness", 7))
+
+        # Orientation retry (OCRead / dynamic ROI only): deskew_crop()
+        # resolves *which way* a rotated line is tilted, but not whether
+        # it came out upside-down (0 vs 180 degrees) - that ambiguity is
+        # left to PaddleOCR's own angle classifier (use_angle_cls). On
+        # this print - tiny, sparse dot-matrix digits - that classifier
+        # isn't reliable: debug captures show visibly worse reads on
+        # cycles where the cap was genuinely upside-down in frame. Rather
+        # than trust it blindly every cycle, a low-confidence (or empty)
+        # first pass is retried against a 180-degree-rotated copy of the
+        # same crop, keeping whichever pass scores higher. Only fires when
+        # the first pass looks doubtful, so the common case (upright,
+        # confident read) pays no extra latency.
+        self.orientation_retry_enabled = bool(dynamic_roi_cfg.get("orientation_retry_enabled", True))
+        self.orientation_retry_confidence_threshold = float(
+            dynamic_roi_cfg.get("orientation_retry_confidence_threshold", 0.85)
+        )
+
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
         log.debug(
-            "PaddleOCR init: preprocess_mode=%s downscale=%s keywords=%s",
+            "PaddleOCR init: preprocess_mode=%s downscale=%s keywords=%s derib_enabled=%s "
+            "orientation_retry_enabled=%s",
             self.preprocess_mode,
             self.downscale,
             self.keywords,
+            self.derib_enabled,
+            self.orientation_retry_enabled,
         )
 
     def warmup(self) -> None:
@@ -116,6 +159,70 @@ class PaddleOCR:
         # since the print here is essentially monochrome ink on plastic
         # anyway and this avoids any channel-count surprises in the model.
         return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+
+    def _derib_crop(self, crop):
+        """
+        Detects and inpaints long straight rib lines crossing the deskewed
+        OCRead crop, before the recognizer ever sees it.
+
+        Same detection technique as text_locator._erase_long_lines()
+        (blackhat -> threshold -> HoughLinesP), but run directly on the
+        crop and used to inpaint real pixels rather than blank a
+        clustering mask - see the comment above self.derib_enabled in
+        __init__ for why this exists.
+
+        min_length_frac is relative to the crop's own largest dimension
+        rather than an absolute pixel count, since dynamic ROI crops vary
+        in size cycle to cycle (unlike text_locator's search crop, which
+        is close to full-frame-sized every time). Keep this conservative:
+        a crop is fit tightly around the text, so the *real* printed line
+        can itself span a large fraction of the crop's width, and in
+        principle a row of characters bridged by HoughLinesP's maxLineGap
+        could be mistaken for one long line. In practice individual
+        digit/letter shapes rarely present one straight pixel-level edge
+        the way a rib does, but verify against dynamic_roi.debug_save
+        captures (compare the pre/post image) before trusting this on the
+        line, and tighten min_length_frac or thickness if it ever bites
+        into real characters instead of the rib.
+
+        Best-effort: any failure or "nothing found" returns the crop
+        unchanged, since a missed rib is no worse than today's behaviour.
+        """
+        try:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+            h, w = gray.shape[:2]
+
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (max(1, self.derib_blackhat_kernel),) * 2
+            )
+            blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel)
+            _, mask = cv2.threshold(blackhat, self.derib_threshold, 255, cv2.THRESH_BINARY)
+
+            min_length = int(max(w, h) * self.derib_min_length_frac)
+            lines = cv2.HoughLinesP(
+                mask, 1, np.pi / 180,
+                threshold=40, minLineLength=min_length, maxLineGap=10,
+            )
+            if lines is None:
+                return crop
+
+            inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+            found = False
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+                if length < min_length:
+                    continue
+                cv2.line(inpaint_mask, (x1, y1), (x2, y2), 255, thickness=self.derib_thickness)
+                found = True
+
+            if not found:
+                return crop
+
+            return cv2.inpaint(crop, inpaint_mask, 3, cv2.INPAINT_TELEA)
+        except Exception as exc:
+            log.warning("Rib inpainting failed (non-fatal), crop used as-is: %s", exc)
+            return crop
 
     def _downscale_roi(self, frame):
         if self.downscale >= 1.0:
@@ -204,21 +311,31 @@ class PaddleOCR:
 
         return apply_roi(frame, roi), None
 
-    def _write_ocr_result_debug(self, debug_dir, display_frame, candidates, elapsed_ms):
+    def _write_ocr_result_debug(self, debug_dir, display_frame, candidates, elapsed_ms, extra_lines=None):
         """Write the actual OCR outcome (not just the crop) into the same
         per-cycle debug folder text_locator.py used, so a debug capture
         shows what was read, not only where the crop came from - reviewing
         localization and recognition together instead of needing a second
         round-trip for log lines.
+
+        extra_lines: optional list of extra "key=value" strings appended
+        to the report header - currently used to record whether the
+        orientation retry (see _recognize()) ended up using the flipped
+        crop, so a debug capture also shows *why* a read looks the way it
+        does, not just what it read.
         """
         try:
             full_text = " ".join(c["text"] for c in candidates).strip()
-            lines = [f"text={c['text']!r} confidence={c['confidence']}" for c in candidates]
-            report = (
-                f"full_text={full_text!r}\n"
-                f"elapsed_ms={round(elapsed_ms, 1)}\n"
-                f"candidate_count={len(candidates)}\n" + "\n".join(lines) + "\n"
-            )
+            header_lines = [
+                f"full_text={full_text!r}",
+                f"elapsed_ms={round(elapsed_ms, 1)}",
+                f"candidate_count={len(candidates)}",
+            ]
+            if extra_lines:
+                header_lines.extend(extra_lines)
+            body_lines = [f"text={c['text']!r} confidence={c['confidence']}" for c in candidates]
+            report = "\n".join(header_lines + body_lines) + "\n"
+
             os.makedirs(debug_dir, exist_ok=True)
             with open(os.path.join(debug_dir, "ocr_result.txt"), "w", encoding="utf-8") as f:
                 f.write(report)
@@ -239,6 +356,42 @@ class PaddleOCR:
         except Exception as exc:  # pragma: no cover - debug aid only, never fatal
             log.warning("OCR result debug write failed (non-fatal): %s", exc)
 
+    @staticmethod
+    def _parse_paddle_results(results):
+        """Flattens PaddleOCR's raw .ocr() return value into the
+        {"text", "confidence"} candidate list shape used everywhere else in
+        this class. Factored out of _recognize() so the orientation retry
+        (a second .ocr() call on a flipped crop, see _recognize()) can
+        parse its result the same way without duplicating this loop.
+        """
+        candidates = []
+        if not results:
+            return candidates
+        for page_results in results:
+            if not page_results:
+                continue
+            for item in page_results:
+                if not isinstance(item, (list, tuple)) or len(item) < 2:
+                    continue
+                rec = item[1]
+                if not isinstance(rec, (list, tuple)) or len(rec) < 2:
+                    continue
+                text = rec[0]
+                score = rec[1]
+                if not text.strip():
+                    continue
+                candidates.append({"text": text, "confidence": round(float(score), 3)})
+        return candidates
+
+    @staticmethod
+    def _score_candidates(candidates):
+        """Aggregate confidence score used to compare two candidate sets
+        (a crop vs its 180-degree-rotated twin, see _recognize()'s
+        orientation retry). Sum rather than mean - deliberately rewards an
+        orientation that recovers *more* legible text, not just whichever
+        set happens to contain one single high-confidence token."""
+        return sum(c["confidence"] for c in candidates)
+
     def _recognize(self, frame, profile=False, dynamic_roi=False):
         """
         Shared pipeline: ROI, downscale, and the actual PaddleOCR inference call.
@@ -248,6 +401,15 @@ class PaddleOCR:
         `read()` (raw read-out, for the OCRead mode) build on this so the
         downscale/preprocessing/inference path is identical between the two
         modes — only the ROI step differs, via dynamic_roi (OCRead only).
+
+        For dynamic_roi (OCRead) specifically, two extra passes can run,
+        each targeting a documented failure mode rather than general
+        robustness padding - see _derib_crop() and the orientation-retry
+        block below for the evidence behind each:
+          - rib inpainting on the crop itself (derib_enabled)
+          - a low-confidence retry against a 180-degree-rotated copy of
+            the crop (orientation_retry_enabled), since deskew_crop() only
+            resolves line tilt, not whether the line came out upside-down.
         """
         profile_data = {} if profile else None
 
@@ -255,6 +417,12 @@ class PaddleOCR:
         roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
         if profile_data is not None:
             profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+        if dynamic_roi and self.derib_enabled:
+            t_derib = time.perf_counter()
+            roi_frame = self._derib_crop(roi_frame)
+            if profile_data is not None:
+                profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
 
         t1 = time.perf_counter()
         roi_frame = self._downscale_roi(roi_frame)
@@ -284,27 +452,42 @@ class PaddleOCR:
         if profile_data is not None:
             profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
 
+        candidates = self._parse_paddle_results(results)
+
+        # Orientation retry - see the docstring above and the comment
+        # above self.orientation_retry_enabled in __init__. Only pays for
+        # a second inference pass when the first one looks doubtful
+        # (nothing found, or any candidate below threshold); a clean
+        # upright read never takes this branch.
+        used_flipped = False
+        if dynamic_roi and self.orientation_retry_enabled:
+            worst_conf = min((c["confidence"] for c in candidates), default=0.0)
+            if not candidates or worst_conf < self.orientation_retry_confidence_threshold:
+                t_retry = time.perf_counter()
+                flipped_candidates = []
+                flipped_frame = None
+                try:
+                    flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
+                    flipped_results = self._paddle.ocr(flipped_frame)
+                    flipped_candidates = self._parse_paddle_results(flipped_results)
+                except Exception as exc:
+                    log.warning("Orientation retry failed (non-fatal): %s", exc)
+                if profile_data is not None:
+                    profile_data["orientation_retry_ms"] = round((time.perf_counter() - t_retry) * 1000, 3)
+
+                if flipped_frame is not None and self._score_candidates(flipped_candidates) > self._score_candidates(candidates):
+                    candidates = flipped_candidates
+                    roi_frame = flipped_frame  # keep debug capture consistent with what was actually read
+                    used_flipped = True
+                    log.debug("Orientation retry: flipped crop scored higher, using it.")
+
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
-        candidates = []
-        if results:
-            for page_results in results:
-                if not page_results:
-                    continue
-                for item in page_results:
-                    if not isinstance(item, (list, tuple)) or len(item) < 2:
-                        continue
-                    rec = item[1]
-                    if not isinstance(rec, (list, tuple)) or len(rec) < 2:
-                        continue
-                    text = rec[0]
-                    score = rec[1]
-                    if not text.strip():
-                        continue
-                    candidates.append({"text": text, "confidence": round(float(score), 3)})
-
         if cycle_debug_dir:
-            self._write_ocr_result_debug(cycle_debug_dir, roi_frame, candidates, elapsed_ms)
+            self._write_ocr_result_debug(
+                cycle_debug_dir, roi_frame, candidates, elapsed_ms,
+                extra_lines=[f"used_flipped_orientation={used_flipped}"],
+            )
 
         return candidates, elapsed_ms, profile_data
 
