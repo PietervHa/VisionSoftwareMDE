@@ -72,23 +72,50 @@ class PaddleOCR:
             log.warning("PaddleOCR warm-up inference failed (non-fatal): %s", exc)
 
     def _preprocess_image(self, frame):
-        """Enhance image contrast and clarity for better OCR"""
+        """Enhance the ROI crop for PaddleOCR's recognizer before inference.
+
+        This is deliberately NOT the same treatment as tesseract_ocr.py's
+        version. PaddleOCR's recognition model is a CNN trained on natural,
+        anti-aliased grayscale/color crops - hard binarization (Otsu/
+        adaptive threshold, which Tesseract benefits from) throws away the
+        soft edge gradients that CNN was trained on and tends to hurt
+        accuracy rather than help it. So this only ever does two things:
+        upscale small crops, and gently lift local contrast. It never
+        produces a binary mask.
+
+        Upscaling matters a lot here specifically because of dynamic ROI:
+        it now hands this function a tight crop of just the printed line(s)
+        instead of the old large static box, so a two-line dot-matrix stamp
+        can end up as little as ~25-30px tall per line - well below the
+        ~40-60px recognition accuracy tends to need. mode == "off" skips
+        all of this and is intended for debugging/comparison, not normal
+        production use.
+        """
         mode = self.preprocess_mode
         if mode == "off":
             return frame
 
-        if len(frame.shape) == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = frame
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        if mode == "fast":
-            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            return binary
+        h, w = gray.shape[:2]
+        short = min(h, w)
+        if short < 200:
+            # Same upscale heuristic as tesseract_ocr.py, for consistency -
+            # small crops get a stronger boost, capping out around 2-3x
+            # rather than scaling indefinitely.
+            scale = max(2, int(160 / short)) if short < 80 else 2
+            gray = cv2.resize(gray, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
 
         enhanced = self._clahe.apply(gray)
-        denoised = cv2.medianBlur(enhanced, 3)
-        return denoised
+
+        if mode == "accurate":
+            enhanced = cv2.medianBlur(enhanced, 3)
+
+        # Paddle's recognizer expects a 3-channel image - replicate the
+        # enhanced grayscale back out rather than passing single-channel,
+        # since the print here is essentially monochrome ink on plastic
+        # anyway and this avoids any channel-count surprises in the model.
+        return cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
     def _downscale_roi(self, frame):
         if self.downscale >= 1.0:
@@ -138,7 +165,16 @@ class PaddleOCR:
                 return frame
 
             rotated_rect = located.get("rotated_rect")
-            crop = deskew_crop(frame, rotated_rect) if rotated_rect else None
+            # Extra margin here (beyond dynamic_roi.padding_px, which is
+            # already baked into rotated_rect) is specifically for
+            # PaddleOCR's own internal detector, which tends to need a bit
+            # of non-text margin around a region to reliably fire - a crop
+            # with characters right up against the edge is more likely to
+            # be missed by its detector even when a human would read it
+            # fine. This is separate from (and on top of) the tighter
+            # padding used for our own CV clustering, which stays as-is
+            # since loosening that risks pulling ribs back into detection.
+            crop = deskew_crop(frame, rotated_rect, extra_padding_px=20) if rotated_rect else None
             if crop is None:
                 # Degenerate rotated rect (shouldn't normally happen) - use
                 # the axis-aligned box we already computed rather than the
@@ -180,6 +216,11 @@ class PaddleOCR:
         roi_frame = self._downscale_roi(roi_frame)
         if profile_data is not None:
             profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
+
+        t1b = time.perf_counter()
+        roi_frame = self._preprocess_image(roi_frame)
+        if profile_data is not None:
+            profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
 
         debug_enabled = log.isEnabledFor(logging.DEBUG)
         if debug_enabled:
