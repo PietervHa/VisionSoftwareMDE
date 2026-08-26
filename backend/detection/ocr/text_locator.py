@@ -103,6 +103,28 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     blackhat_threshold = int(dyn_cfg.get("blackhat_threshold", 25))
     _, dark_mask = cv2.threshold(blackhat, blackhat_threshold, 255, cv2.THRESH_BINARY)
 
+    # Erase long straight line segments (the cap's molded ribs) from the
+    # ink mask before doing anything else with it. On a clean reference
+    # photo, blackhat mostly cancels these out on its own (broad,
+    # slowly-varying shading) - but under real production lighting the rib
+    # edges can catch enough of a shadow to come through as solid, sharp
+    # lines that blackhat treats exactly like ink. A rib line is long
+    # (150-400+px observed) and dead straight; no single character or
+    # separator glyph comes anywhere close to that length (~39px was the
+    # largest measured). Hough line detection with a minimum length well
+    # above any real character reliably picks out just the rib arms, even
+    # where a rib happens to run directly across a character - some of
+    # that character's ink is lost too in that exact overlap (there's no
+    # way to tell rib-ink from character-ink where they're genuinely the
+    # same pixels), but that's a small, local loss compared to the
+    # alternative of the rib dominating the whole cluster selection.
+    if dyn_cfg.get("reject_long_lines", True):
+        dark_mask = _erase_long_lines(
+            dark_mask,
+            min_length=int(dyn_cfg.get("long_line_min_length_px", 90)),
+            thickness=int(dyn_cfg.get("long_line_erase_thickness_px", 6)),
+        )
+
     # Small closing to merge dot-matrix fragments belonging to the same
     # character - deliberately much smaller than the blackhat kernel so it
     # doesn't re-bridge the gap back to the molded ribs.
@@ -113,6 +135,19 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
 
     min_area = float(dyn_cfg.get("min_component_area", 3))
     max_area = float(dyn_cfg.get("max_component_area", 2000))
+    # Per-component width/height cap, separate from the area cap above. A
+    # single component's area alone doesn't catch every kind of oversized
+    # non-text shape: a sparse, branching blob (e.g. where the cap's two
+    # molded ribs cross) can have a fairly small area for how large its
+    # bounding box is, and a long straight rib-edge segment can be thin
+    # enough to also have a small area despite spanning most of the frame
+    # in one dimension. Both slip through an area-only filter. Measured
+    # against real dot-matrix characters on an actual cap, the largest
+    # single character component was ~39x35px - this cap gives that
+    # roughly 2x headroom for different bottles/lighting while still
+    # rejecting rib/embossing fragments, which run 80-400+px in at least
+    # one dimension.
+    max_component_dim = float(dyn_cfg.get("max_component_dim", 70))
 
     num_labels, labels, stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
 
@@ -122,10 +157,12 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         area = stats[i, cv2.CC_STAT_AREA]
         if area < min_area or area > max_area:
             continue
-        x = stats[i, cv2.CC_STAT_LEFT]
-        y = stats[i, cv2.CC_STAT_TOP]
         cw = stats[i, cv2.CC_STAT_WIDTH]
         ch = stats[i, cv2.CC_STAT_HEIGHT]
+        if cw > max_component_dim or ch > max_component_dim:
+            continue
+        x = stats[i, cv2.CC_STAT_LEFT]
+        y = stats[i, cv2.CC_STAT_TOP]
         boxes.append((x, y, x + cw, y + ch))
         label_ids.append(i)
 
@@ -374,6 +411,27 @@ def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
         clusters.setdefault(find(i), []).append(i)
 
     return max(clusters.values(), key=len)
+
+
+def _erase_long_lines(mask: np.ndarray, min_length: int = 90, thickness: int = 6) -> np.ndarray:
+    """Detect and blank out long straight line segments in a binary mask.
+
+    Used to strip a bottle cap's molded ribs out of the ink mask before
+    component detection - see the call site in locate_text_region() for
+    why. Only erases segments at or above min_length, which should be set
+    well above the longest plausible single character/glyph so real text
+    is never at risk of being mistaken for a rib.
+    """
+    lines = cv2.HoughLinesP(mask, 1, np.pi / 180, threshold=60, minLineLength=min_length, maxLineGap=15)
+    if lines is None:
+        return mask
+    out = mask.copy()
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        length = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        if length >= min_length:
+            cv2.line(out, (x1, y1), (x2, y2), 0, thickness=thickness)
+    return out
 
 
 def _write_debug(debug_dir: str, **named_images) -> None:

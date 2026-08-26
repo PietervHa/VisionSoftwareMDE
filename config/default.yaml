@@ -95,7 +95,7 @@ ocr:
     # detector less reliable, which is part of why this is now 25 rather
     # than a bare-minimum value: the static roi: box used by the plain
     # "ocr" mode is naturally generous (a fixed, hand-picked region), and
-    # this brings dynamic ROI a bit closer to that instead of cropping asq
+    # this brings dynamic ROI a bit closer to that instead of cropping as
     # tight as possible.
     padding_px: 25
 
