@@ -150,6 +150,14 @@ class PaddleOCR:
         OCRead and still uses the static cfg["roi"] box, via the shared roi
         utility so the coordinate math isn't duplicated across web.py /
         tesseract_ocr.py.
+
+        Returns (crop, cycle_debug_dir). cycle_debug_dir is the same
+        per-cycle folder text_locator.py just wrote its own debug images
+        into (None if dynamic_roi debug_save is off, or in the static-ROI
+        path, which has no equivalent) - _recognize() uses it to write the
+        actual OCR result alongside the localization debug images, so a
+        debug capture shows both where the crop came from and what OCR did
+        with it, instead of just the former.
         """
         if dynamic:
             if not self.dynamic_roi_enabled:
@@ -157,13 +165,14 @@ class PaddleOCR:
                     "OCRead called with dynamic ROI disabled (ocr.dynamic_roi.enabled=false) - "
                     "running OCR on the full frame. Enable it in config to locate text automatically."
                 )
-                return frame
+                return frame, None
 
             located = locate_text_region(frame, self.dynamic_roi_cfg, debug_dir=self.dynamic_roi_debug_dir)
             if not located:
                 log.debug("Dynamic ROI: no text region found on this frame - running OCR on the full frame.")
-                return frame
+                return frame, None
 
+            cycle_debug_dir = located.get("cycle_debug_dir")
             rotated_rect = located.get("rotated_rect")
             # Extra margin here (beyond dynamic_roi.padding_px, which is
             # already baked into rotated_rect) is specifically for
@@ -182,18 +191,53 @@ class PaddleOCR:
                 x1, y1, x2, y2 = located["bbox"]
                 crop = frame[y1:y2, x1:x2]
 
-            return crop
+            return crop, cycle_debug_dir
 
         # Static-ROI path: only reached from run() (the "ocr" keyword mode).
         # read() (OCRead) always passes dynamic=True and never gets here.
         roi = cfg.get("roi")
         if not roi:
-            return frame
+            return frame, None
 
         if self.debug_draw_roi:
             draw_roi(frame, roi)
 
-        return apply_roi(frame, roi)
+        return apply_roi(frame, roi), None
+
+    def _write_ocr_result_debug(self, debug_dir, display_frame, candidates, elapsed_ms):
+        """Write the actual OCR outcome (not just the crop) into the same
+        per-cycle debug folder text_locator.py used, so a debug capture
+        shows what was read, not only where the crop came from - reviewing
+        localization and recognition together instead of needing a second
+        round-trip for log lines.
+        """
+        try:
+            full_text = " ".join(c["text"] for c in candidates).strip()
+            lines = [f"text={c['text']!r} confidence={c['confidence']}" for c in candidates]
+            report = (
+                f"full_text={full_text!r}\n"
+                f"elapsed_ms={round(elapsed_ms, 1)}\n"
+                f"candidate_count={len(candidates)}\n" + "\n".join(lines) + "\n"
+            )
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, "ocr_result.txt"), "w", encoding="utf-8") as f:
+                f.write(report)
+
+            # Captioned image too, for a quick visual glance without having
+            # to open the text file - shows exactly what PaddleOCR received
+            # (post-preprocessing) plus what it read from it.
+            img = display_frame
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            h, w = img.shape[:2]
+            caption_h = 30
+            canvas = np.full((h + caption_h, max(w, 320), 3), 255, dtype=np.uint8)
+            canvas[:h, :w] = img
+            caption = full_text if full_text else "(no text detected)"
+            cv2.putText(canvas, caption, (5, h + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
+            cv2.imwrite(os.path.join(debug_dir, "ocr_result.png"), canvas)
+        except Exception as exc:  # pragma: no cover - debug aid only, never fatal
+            log.warning("OCR result debug write failed (non-fatal): %s", exc)
 
     def _recognize(self, frame, profile=False, dynamic_roi=False):
         """
@@ -208,7 +252,7 @@ class PaddleOCR:
         profile_data = {} if profile else None
 
         t0 = time.perf_counter()
-        roi_frame = self._apply_roi(frame, dynamic=dynamic_roi)
+        roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
         if profile_data is not None:
             profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
@@ -258,6 +302,9 @@ class PaddleOCR:
                     if not text.strip():
                         continue
                     candidates.append({"text": text, "confidence": round(float(score), 3)})
+
+        if cycle_debug_dir:
+            self._write_ocr_result_debug(cycle_debug_dir, roi_frame, candidates, elapsed_ms)
 
         return candidates, elapsed_ms, profile_data
 

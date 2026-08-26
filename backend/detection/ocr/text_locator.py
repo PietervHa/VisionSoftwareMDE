@@ -292,7 +292,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         cv2.drawContours(annotated, [np.intp(box_pts)], 0, (0, 255, 0), 2)
         _write_debug(cycle_debug_dir, bbox_overlay=annotated)
 
-    return {"bbox": bbox, "rotated_rect": rotated_rect, "score": score}
+    return {"bbox": bbox, "rotated_rect": rotated_rect, "score": score, "cycle_debug_dir": cycle_debug_dir}
 
 
 def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0) -> Optional[np.ndarray]:
