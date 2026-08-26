@@ -33,6 +33,38 @@ ocr:
   # rotated upright before recognition instead of being misread.
   use_angle_cls: true
 
+  # PaddleOCR only: CPU thread count for the underlying inference engine.
+  # Worth experimenting with (try matching your machine's physical core
+  # count) once enable_mkldnn below is confirmed working - not touched as
+  # part of the speed investigation below, since enable_mkldnn and model
+  # tier were the two levers with clear evidence behind them.
+  cpu_threads: 4
+
+  # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration. This should
+  # stay true - confirmed via data/logs/vision.log that running without it
+  # (as an earlier build of this migration briefly did) let per-detected-
+  # -text-region cost blow up non-linearly on PP-OCRv6_medium: cycles with
+  # 5-6 separate text regions in frame took multiple *seconds*, one hit
+  # 11.5s, versus ~150-190ms median for the normal 1-3 region case. Only
+  # turn this off temporarily for troubleshooting (e.g. isolating whether a
+  # crash is MKL-DNN-related), not as a normal setting.
+  enable_mkldnn: true
+
+  # PaddleOCR only: pins a specific model tier instead of accepting
+  # whichever one PaddleOCR defaults to for lang="en" (currently
+  # PP-OCRv6_medium - the largest and slowest of the three PP-OCRv6
+  # tiers). Leave both blank to fall back to that default.
+  #
+  # Set below to PP-OCRv6_small as a starting point for the accuracy/speed
+  # trade-off - re-run benchmarks/ocr_benchmark.py (pass profile=True is
+  # already wired up there) against real bottle-cap frames to compare
+  # small vs medium vs PP-OCRv5_server on your own accuracy bar before
+  # settling on one; "sweet spot" is a claim to verify against your own
+  # data, not assume. Available *_det/*_rec tiers as of PaddleOCR 3.7:
+  # PP-OCRv6_{tiny,small,medium}, PP-OCRv5_{mobile,server}.
+  text_detection_model_name: "PP-OCRv6_small_det"
+  text_recognition_model_name: "PP-OCRv6_small_rec"
+
   # OCRead mode only: locates the printed text block via classical CV
   # (dark-ink blob detection + clustering) and deskews it to horizontal
   # before handing it to PaddleOCR, instead of relying on the static roi:
@@ -151,7 +183,7 @@ ocr:
     # detected bbox overlay, etc.) to debug_dir on every read - useful for
     # tuning the thresholds above against real bottles, but leave off in
     # normal production since it writes a file per cycle.
-    debug_save: false
+    debug_save: true
     debug_dir: "data/debug/dynamic_roi"
 
 # Camera settings
