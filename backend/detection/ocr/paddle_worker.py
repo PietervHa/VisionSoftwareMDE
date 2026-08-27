@@ -52,16 +52,35 @@ def _parse_ocr_result(results) -> list:
     return candidates
 
 
-def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threads: int, use_angle_cls: bool) -> None:
+def _worker_loop(
+    request_q: mp.Queue,
+    response_q: mp.Queue,
+    lang: str,
+    cpu_threads: int,
+    use_angle_cls: bool,
+    enable_mkldnn: bool,
+    text_detection_model_name: str | None,
+    text_recognition_model_name: str | None,
+) -> None:
     import os
     # PaddleOCR 3.x moved MKL-DNN control to the enable_mkldnn constructor
     # argument (set explicitly below) rather than reading the old
     # FLAGS_use_mkldnn env var this app relied on under 2.x. The env var is
-    # left set too (harmless either way), but enable_mkldnn=False on the
-    # PaddleOCR(...) call below is what actually disables it now - see
-    # _common_args.py / prepare_common_init_args in the installed
-    # paddleocr package if this ever needs re-checking against a future
-    # version.
+    # left set too (harmless either way), but enable_mkldnn below is what
+    # actually controls it now - see _common_args.py / prepare_common_init_args
+    # in the installed paddleocr package if this ever needs re-checking
+    # against a future version.
+    #
+    # This defaults True (real CPU acceleration) rather than False. An
+    # earlier version of this migration explicitly set it False, carrying
+    # over the *intent* of the old FLAGS_use_mkldnn=0 line - but that env
+    # var most likely never did anything under 2.x either (2.x controlled
+    # this via utility.py's own enable_mkldnn arg, not that FLAGS_ name),
+    # so "preserving" it under 3.x's mechanism - which does work - actually
+    # removed real acceleration that was implicitly on the whole time. That
+    # cost multiple seconds per detected text region on PP-OCRv6_medium
+    # with no acceleration; see ocr.enable_mkldnn in default.yaml if this
+    # ever needs turning back off for a specific troubleshooting reason.
     os.environ.setdefault("FLAGS_use_mkldnn", "0")
     os.environ.setdefault("PADDLE_DISABLE_FAST_MATH", "1")
     import logging
@@ -83,14 +102,28 @@ def _worker_loop(request_q: mp.Queue, response_q: mp.Queue, lang: str, cpu_threa
     # not relevant to an already-cropped product-cap image, and turning
     # them off avoids loading two extra models and running two extra
     # inference passes every single cycle for nothing.
-    ocr = _PaddleOCR(
+    #
+    # text_detection_model_name / text_recognition_model_name pin a
+    # specific model tier (e.g. PP-OCRv6_small_det/_rec) instead of
+    # accepting whichever tier PaddleOCR defaults to for `lang` - see
+    # ocr.text_detection_model_name / ocr.text_recognition_model_name in
+    # default.yaml. Passing lang alongside explicit model names triggers a
+    # (harmless) UserWarning that lang is ignored - that's expected once a
+    # model name is pinned.
+    ocr_kwargs = dict(
         lang=lang,
         cpu_threads=cpu_threads,
         use_textline_orientation=use_angle_cls,
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
-        enable_mkldnn=False,
+        enable_mkldnn=enable_mkldnn,
     )
+    if text_detection_model_name:
+        ocr_kwargs["text_detection_model_name"] = text_detection_model_name
+    if text_recognition_model_name:
+        ocr_kwargs["text_recognition_model_name"] = text_recognition_model_name
+
+    ocr = _PaddleOCR(**ocr_kwargs)
 
     # Pay Paddle's own cold-start cost here, once, at worker startup.
     try:
@@ -123,13 +156,31 @@ class PaddleOCRWorker:
     paddle_ocr.py consumes this directly and doesn't need to know which
     PaddleOCR version, or which raw result-object shape, produced it."""
 
-    def __init__(self, lang: str = "en", cpu_threads: int = 4, use_angle_cls: bool = True, ready_timeout: float = 60.0):
+    def __init__(
+        self,
+        lang: str = "en",
+        cpu_threads: int = 4,
+        use_angle_cls: bool = True,
+        enable_mkldnn: bool = True,
+        text_detection_model_name: str | None = None,
+        text_recognition_model_name: str | None = None,
+        ready_timeout: float = 60.0,
+    ):
         ctx = mp.get_context("spawn")
         self._request_q = ctx.Queue()
         self._response_q = ctx.Queue()
         self._process = ctx.Process(
             target=_worker_loop,
-            args=(self._request_q, self._response_q, lang, cpu_threads, use_angle_cls),
+            args=(
+                self._request_q,
+                self._response_q,
+                lang,
+                cpu_threads,
+                use_angle_cls,
+                enable_mkldnn,
+                text_detection_model_name,
+                text_recognition_model_name,
+            ),
             daemon=True,
         )
         self._process.start()

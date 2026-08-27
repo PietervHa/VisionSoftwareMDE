@@ -32,6 +32,9 @@ class PaddleOCR:
             lang="en",
             cpu_threads=int(ocr_cfg.get("cpu_threads", 4)),
             use_angle_cls=bool(ocr_cfg.get("use_angle_cls", True)),
+            enable_mkldnn=bool(ocr_cfg.get("enable_mkldnn", True)),
+            text_detection_model_name=ocr_cfg.get("text_detection_model_name") or None,
+            text_recognition_model_name=ocr_cfg.get("text_recognition_model_name") or None,
         )
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.keyword_set = set(self.keywords)
