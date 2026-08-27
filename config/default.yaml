@@ -42,22 +42,22 @@ ocr:
 
   # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration.
   #
-  # Defaults to false, NOT because acceleration doesn't help (it's the
-  # single biggest speed lever available - see the comment this replaced,
-  # still true) but because paddlepaddle==3.3.0 (and 3.3.1) has a confirmed
-  # upstream regression that makes enable_mkldnn=True crash on every single
+  # true here assumes paddlepaddle==3.2.2 (not 3.3.x) - see the pip
+  # commands below. paddlepaddle==3.3.0/3.3.1 has a confirmed upstream
+  # regression that makes enable_mkldnn=True crash on every single
   # inference call: "NotImplementedError: ConvertPirAttribute2RuntimeAttribute
   # not support [pir::ArrayAttribute<pir::DoubleAttribute>]" - a bug in the
   # PIR-to-oneDNN conversion layer, not anything in this app. Confirmed
   # against PaddlePaddle's own issue tracker (PaddlePaddle/Paddle#77340):
-  # "This worked correctly in PaddlePaddle 3.2.x and earlier." Their
-  # documented workaround is downgrading:
+  # "This worked correctly in PaddlePaddle 3.2.x and earlier."
+  #
   #     pip uninstall -y paddlepaddle
   #     pip install paddlepaddle==3.2.2
-  # Only flip this to true after `pip show paddlepaddle` says 3.2.2 (or
-  # another working version you've verified) - not while on 3.3.x, or
-  # OCRead will find 0 detections on every cycle again.
-  enable_mkldnn: false
+  #     pip show paddlepaddle   # confirm it says 3.2.2 before relying on this
+  #
+  # If you ever roll back to 3.3.x for any reason, set this back to false
+  # first - otherwise OCRead goes back to finding 0 detections every cycle.
+  enable_mkldnn: true
 
   # PaddleOCR only: pins a specific model tier instead of accepting
   # whichever one PaddleOCR defaults to for lang="en" (currently
