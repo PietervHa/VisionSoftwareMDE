@@ -94,6 +94,31 @@ class PaddleOCR:
         self.orientation_retry_confidence_threshold = float(
             dynamic_roi_cfg.get("orientation_retry_confidence_threshold", 0.85)
         )
+        # Whether low confidence alone (not just an empty result) should
+        # trigger the retry - see the long comment above
+        # orientation_retry_confidence_threshold in default.yaml. Defaults
+        # False now: three threshold values (0.85, 0.6, 0.8) were each
+        # tried against real capture data, and none of them cleanly
+        # separated genuine upside-down cycles from a persistent,
+        # orientation-independent recognition ambiguity on this cap's
+        # leading digit - worse, when the retry fired on the latter, it
+        # picked the wrong (flipped) answer 13/13 times in one 30-cycle
+        # capture. Retrying on a fully empty result is still safe and
+        # still on by default; retrying on "found something, just not
+        # very confident" is not, until that ambiguity is actually
+        # understood rather than threshold-tuned around.
+        self.orientation_retry_require_low_confidence = bool(
+            dynamic_roi_cfg.get("orientation_retry_require_low_confidence", False)
+        )
+
+        # Any cycle slower than this gets its full stage breakdown
+        # (roi_ms/derib_ms/ocr_ms/orientation_retry_ms/total_ocr_call_ms)
+        # logged as a WARNING, regardless of whether the caller passed
+        # profile=True - see the auto-log block in _recognize(). This is
+        # what previous multi-second spikes were missing: elapsed_ms alone
+        # doesn't say whether the time went into Paddle's own compute or
+        # somewhere it shouldn't have.
+        self.slow_cycle_log_threshold_ms = float(ocr_cfg.get("slow_cycle_log_threshold_ms", 800))
 
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
@@ -387,28 +412,30 @@ class PaddleOCR:
             the crop (orientation_retry_enabled), since deskew_crop() only
             resolves line tilt, not whether the line came out upside-down.
         """
-        profile_data = {} if profile else None
+        # Collected unconditionally now (a handful of perf_counter() calls
+        # costs nothing measurable) rather than only when profile=True, so
+        # the slow-cycle logging below always has a real stage breakdown to
+        # show - see self.slow_cycle_log_threshold_ms in __init__. profile=
+        # still controls whether this comes back in the returned result
+        # dict for benchmarks/ocr_benchmark.py.
+        profile_data = {}
 
         t0 = time.perf_counter()
         roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
-        if profile_data is not None:
-            profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+        profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
         if dynamic_roi and self.derib_enabled:
             t_derib = time.perf_counter()
             roi_frame = self._derib_crop(roi_frame)
-            if profile_data is not None:
-                profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
+            profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
 
         t1 = time.perf_counter()
         roi_frame = self._downscale_roi(roi_frame)
-        if profile_data is not None:
-            profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
+        profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
 
         t1b = time.perf_counter()
         roi_frame = self._preprocess_image(roi_frame)
-        if profile_data is not None:
-            profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
+        profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
 
         debug_enabled = log.isEnabledFor(logging.DEBUG)
         if debug_enabled:
@@ -430,8 +457,7 @@ class PaddleOCR:
             log.error("PaddleOCR.ocr() failed: %s", e, exc_info=True)
             candidates = []
 
-        if profile_data is not None:
-            profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
+        profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
 
         # Orientation retry - see the docstring above and the comment
         # above self.orientation_retry_enabled in __init__. Only pays for
@@ -440,8 +466,11 @@ class PaddleOCR:
         # upright read never takes this branch.
         used_flipped = False
         if dynamic_roi and self.orientation_retry_enabled:
-            worst_conf = min((c["confidence"] for c in candidates), default=0.0)
-            if not candidates or worst_conf < self.orientation_retry_confidence_threshold:
+            should_retry = not candidates
+            if self.orientation_retry_require_low_confidence and candidates:
+                worst_conf = min(c["confidence"] for c in candidates)
+                should_retry = should_retry or worst_conf < self.orientation_retry_confidence_threshold
+            if should_retry:
                 t_retry = time.perf_counter()
                 flipped_candidates = []
                 flipped_frame = None
@@ -450,8 +479,7 @@ class PaddleOCR:
                     flipped_candidates = self._paddle.ocr(flipped_frame) or []
                 except Exception as exc:
                     log.warning("Orientation retry failed (non-fatal): %s", exc)
-                if profile_data is not None:
-                    profile_data["orientation_retry_ms"] = round((time.perf_counter() - t_retry) * 1000, 3)
+                profile_data["orientation_retry_ms"] = round((time.perf_counter() - t_retry) * 1000, 3)
 
                 if flipped_frame is not None and self._score_candidates(flipped_candidates) > self._score_candidates(candidates):
                     candidates = flipped_candidates
@@ -460,6 +488,20 @@ class PaddleOCR:
                     log.debug("Orientation retry: flipped crop scored higher, using it.")
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
+        profile_data["total_ocr_call_ms"] = round(elapsed_ms, 3)
+
+        # Auto-log the stage breakdown for any cycle that crossed the slow
+        # threshold, independent of whether the caller passed profile=True -
+        # this is what a spike capture was missing so far: elapsed_ms alone
+        # doesn't say whether the time went into Paddle's own compute
+        # (ocr_ms) or somewhere it shouldn't have (a large gap between
+        # total_ocr_call_ms and ocr_ms+orientation_retry_ms points at
+        # queueing/IPC/system contention rather than model compute).
+        if elapsed_ms > self.slow_cycle_log_threshold_ms:
+            log.warning(
+                "PaddleOCR slow cycle: elapsed_ms=%.1f (threshold=%.0f) stage_breakdown=%s",
+                elapsed_ms, self.slow_cycle_log_threshold_ms, profile_data,
+            )
 
         if cycle_debug_dir:
             self._write_ocr_result_debug(
@@ -495,9 +537,9 @@ class PaddleOCR:
                     continue
             detections.append(candidate)
 
-        if profile_data is not None:
+        if profile:
             profile_data["filter_ms"] = round((time.perf_counter() - t3) * 1000, 3)
-            profile_data["total_ms"] = round(sum(profile_data.values()), 3)
+            profile_data["total_ms"] = round(sum(v for v in profile_data.values() if isinstance(v, (int, float))), 3)
 
         processing_time_ms = round(elapsed_ms, 1)
         searched_word = keywords[0] if keywords else ""
@@ -515,7 +557,7 @@ class PaddleOCR:
             "searched_word": searched_word
         }
 
-        if profile_data is not None:
+        if profile:
             result["_profile_ms"] = profile_data
 
         return result
@@ -550,7 +592,7 @@ class PaddleOCR:
             "mode": "ocread",
         }
 
-        if profile_data is not None:
+        if profile:
             result["_profile_ms"] = profile_data
 
         return result

@@ -40,6 +40,19 @@ ocr:
   # tier were the two levers with clear evidence behind them.
   cpu_threads: 4
 
+  # Any OCRead/OCR cycle slower than this (in ms) gets its full internal
+  # stage timing (roi_ms/derib_ms/ocr_ms/orientation_retry_ms/
+  # total_ocr_call_ms) written to vision.log as a WARNING automatically -
+  # no need to run the benchmark script or pass profile=True to catch a
+  # spike happening live. Added specifically because the last few multi-
+  # second spikes weren't explained by anything found so far (they didn't
+  # correlate with the orientation retry firing) - next time one happens,
+  # search vision.log for "PaddleOCR slow cycle" and the breakdown will
+  # show whether the time went into Paddle's own compute (ocr_ms) or
+  # somewhere it shouldn't have, which points at IPC/system contention
+  # instead.
+  slow_cycle_log_threshold_ms: 800
+
   # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration.
   #
   # true here assumes paddlepaddle==3.2.2 (not 3.3.x) - see the pip
@@ -188,11 +201,71 @@ ocr:
     # tight as possible.
     padding_px: 25
 
+    # Rib inpainting - detects and removes the mold rib crossing through
+    # the deskewed crop before recognition (see _derib_crop() in
+    # paddle_ocr.py).
+    #
+    # REVERTED to false: turning this on made accuracy worse, not better.
+    # In the 2026-08-27 14:xx debug capture, the leading "3" of "3030" came
+    # out visibly smudged in ocr_result.png on multiple cycles - compare
+    # any *_ms crop from that capture side by side with an earlier
+    # (derib-off) capture and the leading digit is noticeably softer/less
+    # crisp. Best guess: derib's own Hough line detection, run directly on
+    # the crop, is catching the near-straight alignment of the digit row's
+    # tops/bottoms (mechanically printed dot-matrix digits sit close enough
+    # to collinear that this is plausible) and inpainting across part of a
+    # real character rather than the physical rib. That capture's dominant
+    # failure mode became a confident "2030" instead of "3030" misread
+    # (0.95-0.99 confidence - not a low-confidence/orientation issue at
+    # all), consistent with inpainting altering the character rather than
+    # restoring it. Don't re-enable without visually confirming, crop by
+    # crop, that it's removing the rib and NOT touching character pixels -
+    # a tighter derib_min_length_frac (0.8+) would be the first thing to
+    # try if revisiting this.
+    derib_enabled: false
+    derib_blackhat_kernel: 25
+    derib_threshold: 32
+    derib_min_length_frac: 0.6
+    derib_thickness: 7
+
+    # Orientation retry - re-runs recognition on a 180-degree-flipped copy
+    # of the crop, since deskew_crop() only resolves line tilt, not
+    # upside-down-ness (see _recognize() in paddle_ocr.py).
+    #
+    # orientation_retry_require_low_confidence is back to true - turning
+    # it off (previous version of this comment) was a mistake, not a fix.
+    # The 2026-08-27 15:30 capture's "13/13 wrong when it fires" reading
+    # was real but mis-interpreted: deskew_crop() sometimes genuinely
+    # hands PaddleOCR an upside-down crop (visible directly in
+    # ocr_result.png - the cap is upright in text_locator_bbox_overlay.png
+    # but the deskewed crop isn't), and the retry was correctly catching
+    # and flipping those - "BB 02/25" reading perfectly post-flip in
+    # nearly every one of those 13 cycles confirms the flip itself worked.
+    # It just couldn't ALSO fix the separate, persistent leading-digit
+    # legibility issue on top, so the end result was still wrong content
+    # even with orientation correctly fixed. Turning the check off entirely
+    # to avoid that residual wrongness threw out the (working) orientation
+    # fix along with it: the 2026-08-27 15:50 capture (this check
+    # disabled) came back with 20/37 cycles of pure garbage - genuinely
+    # upside-down crops with nothing left to correct them - which is worse
+    # than "right-side-up but still misreads one digit."
+    #
+    # Bottom line: this retry's job is fixing orientation, not fixing
+    # leading-digit legibility - it was never going to solve that on its
+    # own, and shouldn't be judged by whether it did. Don't disable it
+    # over that; the 0.8 threshold itself looks reasonable from both
+    # captures - genuine garbage/upside-down clusters have scored roughly
+    # 0.4-0.85, correct-but-digit-ambiguous reads 0.90+, fairly
+    # consistently across sessions.
+    orientation_retry_enabled: true
+    orientation_retry_require_low_confidence: true
+    orientation_retry_confidence_threshold: 0.8
+
     # Debug aid: when true, writes intermediate images (blackhat mask,
     # detected bbox overlay, etc.) to debug_dir on every read - useful for
     # tuning the thresholds above against real bottles, but leave off in
     # normal production since it writes a file per cycle.
-    debug_save: false
+    debug_save: true
     debug_dir: "data/debug/dynamic_roi"
 
 # Camera settings
