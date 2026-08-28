@@ -22,11 +22,13 @@ No trained model involved. Two stages:
    the molded ribs while still picking out the small printed characters.
 2. Connected components on the blackhat result, then proximity-based
    clustering (union-find): printed text is many small components sitting
-   close together, so the cluster with the most components (not simply
-   every surviving pixel unioned together) is taken as the text block.
-   This is what keeps stray specks - antialiasing on a mold line edge, a
-   dust fleck - from dragging the bounding box out to somewhere the text
-   isn't.
+   close together, so the cluster with the most total ink *area* (not
+   simply every surviving pixel unioned together, and not just the most
+   components - see _largest_proximity_cluster's docstring for why count
+   alone was foolable) is taken as the text block. This is what keeps
+   stray specks - antialiasing on a mold line edge, a dust fleck, or a
+   partially-erased rib fragmenting into a chain of small leftover pieces
+   - from dragging the bounding box out to somewhere the text isn't.
 
 Tunable entirely through cfg["ocr"]["dynamic_roi"] (see config/default.yaml).
 Returns None when nothing plausible is found, so the caller can fall back
@@ -153,6 +155,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
 
     boxes = []
     label_ids = []
+    areas = []
     for i in range(1, num_labels):  # label 0 is background
         area = stats[i, cv2.CC_STAT_AREA]
         if area < min_area or area > max_area:
@@ -165,6 +168,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
         y = stats[i, cv2.CC_STAT_TOP]
         boxes.append((x, y, x + cw, y + ch))
         label_ids.append(i)
+        areas.append(int(area))
 
     if debug_dir:
         _write_debug(cycle_debug_dir, search=search, blackhat=blackhat, dark_mask=dark_mask, closed=closed)
@@ -175,7 +179,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     # it's just finding a reliable "seed" that's definitely part of the
     # real text.
     seed_gap = float(dyn_cfg.get("cluster_max_gap_px", 25))
-    cluster = _largest_proximity_cluster(boxes, max_gap=seed_gap)
+    cluster = _largest_proximity_cluster(boxes, areas, max_gap=seed_gap)
 
     if not cluster or len(cluster) < min_components:
         log.debug(
@@ -437,17 +441,31 @@ def _extend_cluster_along_line(boxes: list, seed: list, max_perp_dist: float, ma
     return extended
 
 
-def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
+def _largest_proximity_cluster(boxes: list, areas: list, max_gap: float) -> list:
     """
     Groups boxes via union-find, connecting any two whose gap (edge-to-edge
-    distance) is <= max_gap, and returns the indices of the largest group
-    by component count.
+    distance) is <= max_gap, and returns the indices of the group with the
+    most total ink area.
 
-    Printed text is several small components (digits, punctuation) sitting
-    close together; picking the cluster with the most members - rather
-    than unioning every surviving component in the frame - is what keeps
-    isolated noise specks from dragging the final bbox somewhere the text
-    isn't.
+    Originally scored by component count instead of area - printed text is
+    several small components sitting close together, so "the most members"
+    seemed like a reasonable proxy for "the real text." In practice this
+    was foolable: a partially-erased mold rib (see _erase_long_lines) can
+    leave behind a sparse chain of small leftover fragments, and a chain
+    like that can have MORE members than the real text block does despite
+    being visually obvious debris - confirmed directly against a debug
+    capture where this picked the embossed "PE/PA"/recycling-triangle
+    region over the real ink two frames in three, because the broken rib
+    fragments there simply out-counted the real characters.
+    Total area is harder to fool the same way: real ink is a dense block
+    of substantial character strokes, while a broken rib is thin and
+    sparse even when it fragments into many pieces, so it takes a lot more
+    pieces to match the same total area. A single unerased rib segment
+    surviving as one big blob after the morphological close is still
+    covered - it isn't picked because of its area, but because it isn't
+    excluded either, it'd still need to pass the min_cluster_components
+    check downstream, which a single component fails on its own the same
+    way it always did.
     """
     n = len(boxes)
     if n == 0:
@@ -484,7 +502,7 @@ def _largest_proximity_cluster(boxes: list, max_gap: float) -> list:
     for i in range(n):
         clusters.setdefault(find(i), []).append(i)
 
-    return max(clusters.values(), key=len)
+    return max(clusters.values(), key=lambda idxs: sum(areas[i] for i in idxs))
 
 
 def _erase_long_lines(mask: np.ndarray, min_length: int = 90, thickness: int = 6) -> np.ndarray:
