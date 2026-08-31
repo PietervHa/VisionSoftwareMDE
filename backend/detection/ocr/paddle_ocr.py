@@ -400,12 +400,29 @@ class PaddleOCR:
 
     @staticmethod
     def _score_candidates(candidates):
-        """Aggregate confidence score used to compare two candidate sets
-        (a crop vs its 180-degree-rotated twin, see _recognize()'s
-        orientation retry). Sum rather than mean - deliberately rewards an
-        orientation that recovers *more* legible text, not just whichever
-        set happens to contain one single high-confidence token."""
-        return sum(c["confidence"] for c in candidates)
+        """Aggregate score used to compare two candidate sets (a crop vs
+        its 180-degree-rotated twin, see _recognize()'s orientation retry).
+
+        Confidence-weighted character count, not a plain confidence sum.
+        The plain sum had a specific, observed failure: on a blurry crop,
+        the WRONG (upside-down) orientation collapsed to a single short
+        garbage token at moderate confidence ('307312156' @ 0.665, 9
+        chars), while the correct orientation split into two lower-scored
+        but much longer lines. Summing bare confidences let the short
+        garbage win - confirmed in a real capture where
+        used_flipped_orientation=True and the saved winning crop was
+        visibly upside-down, i.e. the retry took a correctly-oriented crop
+        and actively flipped it the wrong way.
+
+        Weighting each candidate's confidence by how many characters it
+        actually recovered fixes that: a longer, moderately-confident read
+        beats a short, confidently-garbled one. When both orientations
+        recover the same amount of text (the common case - e.g. a crop
+        that's already upright, where both readings are full-length) the
+        character counts are equal, so this reduces to the same ordering
+        as the old confidence sum and changes nothing.
+        """
+        return sum(c["confidence"] * len(c["text"].strip()) for c in candidates)
 
     def _recognize(self, frame, profile=False, dynamic_roi=False):
         """
@@ -447,6 +464,21 @@ class PaddleOCR:
         roi_frame = self._downscale_roi(roi_frame)
         profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
 
+        # Save the crop as it stands BEFORE CLAHE/upscaling. ocr_result.png
+        # is written post-preprocess, which is the right thing to see when
+        # asking "what did the recognizer actually get" - but it's the
+        # wrong input for tuning any classical-CV stage that runs on the
+        # raw crop (line splitting, rib detection, thresholding), since
+        # CLAHE and a 2x cubic upscale change the pixel statistics those
+        # stages key off. Writing both means such work can be tuned
+        # offline against real frames instead of guessing.
+        if cycle_debug_dir:
+            try:
+                os.makedirs(cycle_debug_dir, exist_ok=True)
+                cv2.imwrite(os.path.join(cycle_debug_dir, "crop_raw_preprocess.png"), roi_frame)
+            except Exception as exc:  # pragma: no cover - debug aid only
+                log.warning("Raw crop debug write failed (non-fatal): %s", exc)
+
         t1b = time.perf_counter()
         roi_frame = self._preprocess_image(roi_frame)
         profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
@@ -479,6 +511,7 @@ class PaddleOCR:
         # (nothing found, or any candidate below threshold); a clean
         # upright read never takes this branch.
         used_flipped = False
+        retry_audit = None
         if dynamic_roi and self.orientation_retry_enabled:
             should_retry = not candidates
             if self.orientation_retry_require_low_confidence and candidates:
@@ -495,7 +528,23 @@ class PaddleOCR:
                     log.warning("Orientation retry failed (non-fatal): %s", exc)
                 profile_data["orientation_retry_ms"] = round((time.perf_counter() - t_retry) * 1000, 3)
 
-                if flipped_frame is not None and self._score_candidates(flipped_candidates) > self._score_candidates(candidates):
+                # Record BOTH sides of the comparison, not just the winner.
+                # Without this a debug capture only shows the chosen result,
+                # so a wrong choice can't be told apart from a case where
+                # both orientations read badly - which is exactly the
+                # ambiguity that made the previous scoring bug take several
+                # sessions to pin down.
+                orig_score = self._score_candidates(candidates)
+                flip_score = self._score_candidates(flipped_candidates)
+                retry_audit = (
+                    f"retry_original_score={orig_score:.2f} "
+                    f"original_text={' '.join(c['text'] for c in candidates).strip()!r} | "
+                    f"retry_flipped_score={flip_score:.2f} "
+                    f"flipped_text={' '.join(c['text'] for c in flipped_candidates).strip()!r}"
+                )
+                log.debug("Orientation retry: %s", retry_audit)
+
+                if flipped_frame is not None and flip_score > orig_score:
                     candidates = flipped_candidates
                     roi_frame = flipped_frame  # keep debug capture consistent with what was actually read
                     used_flipped = True
@@ -520,7 +569,9 @@ class PaddleOCR:
         if cycle_debug_dir:
             self._write_ocr_result_debug(
                 cycle_debug_dir, roi_frame, candidates, elapsed_ms,
-                extra_lines=[f"used_flipped_orientation={used_flipped}"],
+                extra_lines=[
+                    f"used_flipped_orientation={used_flipped}",
+                ] + ([retry_audit] if retry_audit else []),
             )
 
         return candidates, elapsed_ms, profile_data

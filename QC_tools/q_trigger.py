@@ -24,9 +24,19 @@ Two trigger methods are supported:
    ... and run the main app as usual. It will start listening on
    trigger.port (5001 by default) in addition to the keyboard listener.
 
+Stopping the run:
+   By default the run is bounded by --hours/max_hours (capped at 8h). You can
+   instead (or additionally) bound it by a fixed number of triggers using
+   --max-triggers/max_triggers, so you don't have to work out how many hours
+   correspond to the number of triggers you actually want. Whichever limit is
+   hit first stops the run. If --max-triggers is given without --hours, the
+   time limit is effectively disabled (set to the 8h ceiling) so the trigger
+   count is what actually governs the run.
+
 Standalone usage:
    python -m QC_tools.q_trigger              # tcp mode (default)
    python -m QC_tools.q_trigger --delay 1 --interval 1 --hours 0.33 ->example of modified command
+   python -m QC_tools.q_trigger --delay 1 --interval 1 --max-triggers 100 ->stop after exactly 100 triggers
    python -m QC_tools.q_trigger --mode keyboard
 
 From the main application:
@@ -51,6 +61,7 @@ log = logging.getLogger(__name__)
 DEFAULT_DELAY_S = 30.0
 DEFAULT_INTERVAL_S = 1.0
 DEFAULT_MAX_HOURS = 8.0
+DEFAULT_MAX_TRIGGERS: Optional[int] = None  # no limit by default -- bounded by max_hours instead
 
 
 def _parse_trigger_byte(value) -> int:
@@ -81,9 +92,13 @@ def run_q_trigger(
     delay_s: float = DEFAULT_DELAY_S,
     interval_s: float = DEFAULT_INTERVAL_S,
     max_hours: float = DEFAULT_MAX_HOURS,
+    max_triggers: Optional[int] = DEFAULT_MAX_TRIGGERS,
     can_trigger: Optional[Callable[[], bool]] = None,
 ) -> None:
-    """Send global Q keypresses until stopped or the maximum duration is reached.
+    """Send global Q keypresses until stopped or a maximum limit is reached.
+
+    The run stops on whichever limit is hit first: max_hours (capped at 8h)
+    or max_triggers (total number of Q presses actually sent), if set.
 
     Legacy mode: this simulates an OS-level keystroke and will land in
     whatever window has focus. Prefer run_q_trigger_tcp for local testing.
@@ -92,12 +107,15 @@ def run_q_trigger(
     interval_s = max(0.05, float(interval_s))
     max_hours = min(max(0.0, float(max_hours)), 8.0)
     max_duration_s = max_hours * 3600.0
+    max_triggers = int(max_triggers) if max_triggers is not None and max_triggers > 0 else None
 
     log.info(
-        "Automated Q trigger (keyboard) enabled: first trigger in %.1fs, interval %.2fs, max duration %.2fh",
+        "Automated Q trigger (keyboard) enabled: first trigger in %.1fs, interval %.2fs, "
+        "max duration %.2fh, max triggers %s",
         delay_s,
         interval_s,
         max_hours,
+        max_triggers if max_triggers is not None else "unlimited",
     )
 
     if stop_event.wait(delay_s):
@@ -111,6 +129,9 @@ def run_q_trigger(
         elapsed = time.monotonic() - started_at
         if elapsed >= max_duration_s:
             break
+        if max_triggers is not None and trigger_count >= max_triggers:
+            log.info("Automated Q trigger reached max_triggers=%d, stopping", max_triggers)
+            break
 
         if can_trigger is None or can_trigger():
             try:
@@ -121,6 +142,10 @@ def run_q_trigger(
                 log.exception("Failed to send automated Q trigger")
         else:
             log.debug("Skipping automated Q trigger because vision is busy")
+
+        if max_triggers is not None and trigger_count >= max_triggers:
+            log.info("Automated Q trigger reached max_triggers=%d, stopping", max_triggers)
+            break
 
         # Keep the interval measured between trigger attempts rather than
         # adding it on top of the keypress/logging overhead.
@@ -149,11 +174,15 @@ def run_q_trigger_tcp(
     delay_s: float = DEFAULT_DELAY_S,
     interval_s: float = DEFAULT_INTERVAL_S,
     max_hours: float = DEFAULT_MAX_HOURS,
+    max_triggers: Optional[int] = DEFAULT_MAX_TRIGGERS,
     can_trigger: Optional[Callable[[], bool]] = None,
     connect_timeout_s: float = DEFAULT_TCP_CONNECT_TIMEOUT_S,
     response_timeout_s: float = DEFAULT_TCP_RESPONSE_TIMEOUT_S,
 ) -> None:
-    """Send trigger bytes over TCP until stopped or the maximum duration is reached.
+    """Send trigger bytes over TCP until stopped or a maximum limit is reached.
+
+    The run stops on whichever limit is hit first: max_hours (capped at 8h)
+    or max_triggers (total number of triggers actually sent), if set.
 
     Talks to the same TCPTriggerServer used for PLC integration
     (backend/core/tcp_trigger_server.py). Requires `trigger.enabled: true` in
@@ -165,14 +194,17 @@ def run_q_trigger_tcp(
     interval_s = max(0.05, float(interval_s))
     max_hours = min(max(0.0, float(max_hours)), 8.0)
     max_duration_s = max_hours * 3600.0
+    max_triggers = int(max_triggers) if max_triggers is not None and max_triggers > 0 else None
 
     log.info(
-        "Automated TCP trigger enabled: target %s:%d, first trigger in %.1fs, interval %.2fs, max duration %.2fh",
+        "Automated TCP trigger enabled: target %s:%d, first trigger in %.1fs, interval %.2fs, "
+        "max duration %.2fh, max triggers %s",
         host,
         port,
         delay_s,
         interval_s,
         max_hours,
+        max_triggers if max_triggers is not None else "unlimited",
     )
 
     if stop_event.wait(delay_s):
@@ -187,6 +219,9 @@ def run_q_trigger_tcp(
         while not stop_event.is_set():
             elapsed = time.monotonic() - started_at
             if elapsed >= max_duration_s:
+                break
+            if max_triggers is not None and trigger_count >= max_triggers:
+                log.info("Automated TCP trigger reached max_triggers=%d, stopping", max_triggers)
                 break
 
             if can_trigger is None or can_trigger():
@@ -225,6 +260,10 @@ def run_q_trigger_tcp(
             else:
                 log.debug("Skipping automated TCP trigger because vision is busy")
 
+            if max_triggers is not None and trigger_count >= max_triggers:
+                log.info("Automated TCP trigger reached max_triggers=%d, stopping", max_triggers)
+                break
+
             if stop_event.wait(interval_s):
                 return
     finally:
@@ -247,6 +286,7 @@ def start_q_trigger(
     delay_s: float = DEFAULT_DELAY_S,
     interval_s: float = DEFAULT_INTERVAL_S,
     max_hours: float = DEFAULT_MAX_HOURS,
+    max_triggers: Optional[int] = DEFAULT_MAX_TRIGGERS,
     can_trigger: Optional[Callable[[], bool]] = None,
     host: str = DEFAULT_TCP_HOST,
     port: int = DEFAULT_TCP_PORT,
@@ -258,6 +298,11 @@ def start_q_trigger(
         keypress -- lands in whatever window has focus.
     mode="tcp": sends trigger bytes to the app's TCP trigger server instead;
         never touches the OS keyboard.
+
+    max_triggers: optional cap on the total number of triggers to send. Set
+        this instead of fiddling with max_hours when you just want "send N
+        triggers and stop" -- whichever limit (time or count) is hit first
+        wins.
     """
     stop_event = threading.Event()
 
@@ -271,6 +316,7 @@ def start_q_trigger(
             "delay_s": delay_s,
             "interval_s": interval_s,
             "max_hours": max_hours,
+            "max_triggers": max_triggers,
             "can_trigger": can_trigger,
         }
     elif mode == "keyboard":
@@ -280,6 +326,7 @@ def start_q_trigger(
             "delay_s": delay_s,
             "interval_s": interval_s,
             "max_hours": max_hours,
+            "max_triggers": max_triggers,
             "can_trigger": can_trigger,
         }
     else:
@@ -309,10 +356,35 @@ def main() -> None:
     )
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_S, help="Seconds before the first trigger")
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_S, help="Seconds between triggers")
-    parser.add_argument("--hours", type=float, default=DEFAULT_MAX_HOURS, help="Maximum runtime, capped at 8 hours")
+    parser.add_argument(
+        "--hours",
+        type=float,
+        default=None,
+        help=(
+            "Maximum runtime, capped at 8 hours. If omitted and --max-triggers is set, the time "
+            "limit is effectively disabled (8h ceiling) so --max-triggers governs the run instead."
+        ),
+    )
+    parser.add_argument(
+        "--max-triggers",
+        type=int,
+        default=DEFAULT_MAX_TRIGGERS,
+        help=(
+            "Stop after sending exactly this many triggers, regardless of elapsed time. Combine "
+            "with --interval to control the pace. Omit for no cap (time-based limit only)."
+        ),
+    )
     parser.add_argument("--host", type=str, default=DEFAULT_TCP_HOST, help="TCP trigger server host (tcp mode only)")
     parser.add_argument("--port", type=int, default=DEFAULT_TCP_PORT, help="TCP trigger server port (tcp mode only)")
     args = parser.parse_args()
+
+    # If the user only cares about a trigger count, don't make them also work
+    # out a matching --hours value -- fall back to the 8h ceiling so time
+    # isn't the thing that stops the run first.
+    if args.hours is None:
+        max_hours = DEFAULT_MAX_HOURS if args.max_triggers is None else 8.0
+    else:
+        max_hours = args.hours
 
     stop_event = threading.Event()
 
@@ -324,14 +396,16 @@ def main() -> None:
                 port=args.port,
                 delay_s=args.delay,
                 interval_s=args.interval,
-                max_hours=args.hours,
+                max_hours=max_hours,
+                max_triggers=args.max_triggers,
             )
         else:
             run_q_trigger(
                 stop_event,
                 delay_s=args.delay,
                 interval_s=args.interval,
-                max_hours=args.hours,
+                max_hours=max_hours,
+                max_triggers=args.max_triggers,
             )
     except KeyboardInterrupt:
         stop_event.set()
