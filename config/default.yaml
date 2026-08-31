@@ -21,8 +21,29 @@ ocr:
   # Regex matches dates in DD/MM/YYYY or MM/DD/YYYY format
   date_regex: '\b\d{2}/\d{2}/\d{4}\b'
   preprocess: "fast"  # valid values: "fast" (default), "accurate"
+
+  # downscale/min_dim shrink the crop before inference to save time.
+  # min_dim is the floor they will never shrink below - anything with a
+  # short side already at or under it passes through untouched.
+  #
+  # Raised from 240 to 480 deliberately. Character pixel height is the
+  # binding constraint on this application right now: measured directly
+  # off a real crop, characters are ~17px tall, where the recognizer
+  # wants 32px+ - which is exactly why a "3" reads as an "8" (at this
+  # size they differ by a couple of pixels of gap on the left side).
+  # The fix for that is optical (camera closer / longer lens), but with
+  # min_dim at 240 that fix would have been silently cancelled: any crop
+  # arriving taller than 240px got squashed straight back down to 240,
+  # throwing away exactly the detail the optics just gained. Today's
+  # crops are ~153px short side, so this changes nothing yet - it just
+  # makes sure the ceiling isn't there when the optics improve.
+  #
+  # If cycle time becomes a problem again once crops get bigger, prefer
+  # lowering this back down over living with soft characters - but check
+  # the slow-cycle stage breakdown first (ocr.slow_cycle_log_threshold_ms)
+  # rather than assuming crop size is the cause.
   downscale: 0.6
-  min_dim: 240
+  min_dim: 480
   psm: 7
   oem: 3
   whitelist: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789."
