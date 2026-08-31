@@ -227,9 +227,23 @@ class PaddleOCR:
             _, mask = cv2.threshold(blackhat, self.derib_threshold, 255, cv2.THRESH_BINARY)
 
             min_length = int(max(w, h) * self.derib_min_length_frac)
+            # Hough's own minLineLength isn't just a post-hoc filter - it
+            # changes how Hough merges/detects segments in the first place.
+            # Passing our real target length directly into it here meant a
+            # genuinely-long rib that's slightly broken (antialiasing, a
+            # touch of noise in the blackhat mask) could fail to be found
+            # as one segment at all, well before ever reaching the length
+            # check below - confirmed directly: a real 135px rib on a real
+            # crop went completely undetected at min_length_frac=0.6
+            # (169px required) AND still failed with minLineLength passed
+            # in directly even after lowering the fraction, only starting
+            # to work once Hough's own minLineLength was decoupled from
+            # the length filter. Hough gets a low, permissive value so it
+            # can actually find candidate segments; the real length
+            # requirement is enforced only in the filter loop below.
             lines = cv2.HoughLinesP(
                 mask, 1, np.pi / 180,
-                threshold=40, minLineLength=min_length, maxLineGap=10,
+                threshold=40, minLineLength=30, maxLineGap=10,
             )
             if lines is None:
                 return crop

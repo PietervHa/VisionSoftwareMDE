@@ -205,58 +205,62 @@ ocr:
     # the deskewed crop before recognition (see _derib_crop() in
     # paddle_ocr.py).
     #
-    # REVERTED to false: turning this on made accuracy worse, not better.
-    # In the 2026-08-27 14:xx debug capture, the leading "3" of "3030" came
-    # out visibly smudged in ocr_result.png on multiple cycles - compare
-    # any *_ms crop from that capture side by side with an earlier
-    # (derib-off) capture and the leading digit is noticeably softer/less
-    # crisp. Best guess: derib's own Hough line detection, run directly on
-    # the crop, is catching the near-straight alignment of the digit row's
-    # tops/bottoms (mechanically printed dot-matrix digits sit close enough
-    # to collinear that this is plausible) and inpainting across part of a
-    # real character rather than the physical rib. That capture's dominant
-    # failure mode became a confident "2030" instead of "3030" misread
-    # (0.95-0.99 confidence - not a low-confidence/orientation issue at
-    # all), consistent with inpainting altering the character rather than
-    # restoring it. Don't re-enable without visually confirming, crop by
-    # crop, that it's removing the rib and NOT touching character pixels -
-    # a tighter derib_min_length_frac (0.8+) would be the first thing to
-    # try if revisiting this.
-    derib_enabled: false
+    # Re-enabled after finding and fixing a real bug: derib was passing
+    # min_length_frac's pixel value directly as Hough's own minLineLength
+    # parameter, which doesn't just filter results - it changes how Hough
+    # merges/detects segments in the first place, so a real rib broken up
+    # by antialiasing or mask noise could fail to be found as one segment
+    # at all. Confirmed directly on a real crop: a genuine 135px rib went
+    # completely undetected at the old 0.6 fraction (169px required on
+    # that crop), and even lowering the fraction didn't help until Hough's
+    # own minLineLength was decoupled from the length filter (see the code
+    # comment in _derib_crop()). In other words: on many real crops this
+    # was silently doing nothing at all, in either direction - which is
+    # also why turning it on/off across different sessions kept producing
+    # inconsistent, hard-to-read results. That inconsistency wasn't derib
+    # actively helping or hurting - it mostly wasn't running.
+    #
+    # Important caveat found in the same test: even fixed and firing
+    # correctly, derib only helps the subset of frames where a rib is
+    # actually the reason a character looks soft - checked one real "3030"
+    # misread directly and the rib Hough found was running along the
+    # crop's edge, nowhere near the leading digit, which stayed just as
+    # soft after inpainting as before. Don't expect this alone to fix the
+    # leading-digit accuracy problem - re-test with debug_save on and
+    # judge it on whatever fraction of cycles actually have a rib crossing
+    # the ink, not on the leading-digit problem as a whole.
+    derib_enabled: true
     derib_blackhat_kernel: 25
     derib_threshold: 32
-    derib_min_length_frac: 0.6
+    derib_min_length_frac: 0.4
     derib_thickness: 7
 
     # Orientation retry - re-runs recognition on a 180-degree-flipped copy
     # of the crop, since deskew_crop() only resolves line tilt, not
     # upside-down-ness (see _recognize() in paddle_ocr.py).
     #
-    # orientation_retry_require_low_confidence is back to true - turning
-    # it off (previous version of this comment) was a mistake, not a fix.
-    # The 2026-08-27 15:30 capture's "13/13 wrong when it fires" reading
-    # was real but mis-interpreted: deskew_crop() sometimes genuinely
-    # hands PaddleOCR an upside-down crop (visible directly in
-    # ocr_result.png - the cap is upright in text_locator_bbox_overlay.png
-    # but the deskewed crop isn't), and the retry was correctly catching
-    # and flipping those - "BB 02/25" reading perfectly post-flip in
-    # nearly every one of those 13 cycles confirms the flip itself worked.
-    # It just couldn't ALSO fix the separate, persistent leading-digit
-    # legibility issue on top, so the end result was still wrong content
-    # even with orientation correctly fixed. Turning the check off entirely
-    # to avoid that residual wrongness threw out the (working) orientation
-    # fix along with it: the 2026-08-27 15:50 capture (this check
-    # disabled) came back with 20/37 cycles of pure garbage - genuinely
-    # upside-down crops with nothing left to correct them - which is worse
-    # than "right-side-up but still misreads one digit."
-    #
-    # Bottom line: this retry's job is fixing orientation, not fixing
-    # leading-digit legibility - it was never going to solve that on its
-    # own, and shouldn't be judged by whether it did. Don't disable it
-    # over that; the 0.8 threshold itself looks reasonable from both
-    # captures - genuine garbage/upside-down clusters have scored roughly
-    # 0.4-0.85, correct-but-digit-ambiguous reads 0.90+, fairly
-    # consistently across sessions.
+    # Left at true for now, but flagged rather than decided: a fresh
+    # 2026-08-28 55-cycle session brought the cumulative track record to
+    # 0/36 correct across every audited case where this has fired, over
+    # two independent sessions (0/13, then 0/23) - while non-retry cycles
+    # in that same session succeeded 25% of the time (8/32). The previous
+    # comment's reasoning (retry fixes orientation, just can't also fix
+    # the separate leading-digit legibility issue) still looks right on
+    # inspection - "BB 02/25" keeps reading correctly post-flip - but 0/36
+    # is a stronger number than what motivated re-enabling this last time,
+    # and the last time this was turned off, disabling it produced a
+    # worse failure mode (pure garbage on genuinely-upside-down crops)
+    # rather than a better one. Toggling this a fourth time on aggregate
+    # stats alone doesn't feel like the right call - two open questions
+    # actually decide it: (1) do bottles on the real line ever arrive
+    # genuinely upside-down, or does that only happen in hand-spun testing
+    # like this capture - if real bottles stay within a limited angle
+    # range in production, this entire trade-off may not matter there; and
+    # (2) does the PLC do an exact string match against an expected value,
+    # or something more tolerant - if it's exact-match, a legible-but-
+    # wrong-digit read and a garbled one likely both just fail the same
+    # way downstream, and this setting mostly only affects how readable
+    # the logged text is to a human, not the accept/reject outcome itself.
     orientation_retry_enabled: true
     orientation_retry_require_low_confidence: true
     orientation_retry_confidence_threshold: 0.8

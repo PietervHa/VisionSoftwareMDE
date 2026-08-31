@@ -513,8 +513,17 @@ def _erase_long_lines(mask: np.ndarray, min_length: int = 90, thickness: int = 6
     why. Only erases segments at or above min_length, which should be set
     well above the longest plausible single character/glyph so real text
     is never at risk of being mistaken for a rib.
+
+    Hough's own minLineLength parameter isn't just a post-hoc filter - it
+    changes how it merges/detects segments in the first place, so a
+    genuinely long rib broken up by antialiasing or mask noise could fail
+    to be found as one segment at all if min_length were passed straight
+    into the Hough call. It gets a low, permissive value instead so Hough
+    can actually find candidate segments; min_length is enforced only in
+    the filter loop below. See the near-identical bug (and the real crop
+    it was confirmed against) in paddle_ocr.py's _derib_crop().
     """
-    lines = cv2.HoughLinesP(mask, 1, np.pi / 180, threshold=60, minLineLength=min_length, maxLineGap=15)
+    lines = cv2.HoughLinesP(mask, 1, np.pi / 180, threshold=60, minLineLength=30, maxLineGap=15)
     if lines is None:
         return mask
     out = mask.copy()
