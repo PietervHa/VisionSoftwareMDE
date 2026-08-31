@@ -171,6 +171,93 @@ def _resolve_camera_index(cam_cfg):
     return None
 
 
+# Properties applied by _apply_manual_settings, in the order they're set.
+# Order matters: auto-exposure must be switched off *before* a manual
+# exposure value will stick, and the same goes for auto-white-balance
+# before a manual white balance temperature.
+_MANUAL_PROPS = (
+    # (config key, cv2 property, human label)
+    ("auto_exposure", cv2.CAP_PROP_AUTO_EXPOSURE, "auto_exposure"),
+    ("exposure", cv2.CAP_PROP_EXPOSURE, "exposure"),
+    ("gain", cv2.CAP_PROP_GAIN, "gain"),
+    ("auto_white_balance", cv2.CAP_PROP_AUTO_WB, "auto_white_balance"),
+    ("white_balance", cv2.CAP_PROP_WB_TEMPERATURE, "white_balance"),
+    ("brightness", cv2.CAP_PROP_BRIGHTNESS, "brightness"),
+    ("contrast", cv2.CAP_PROP_CONTRAST, "contrast"),
+)
+
+
+def _apply_manual_settings(cap, cam_cfg):
+    """Pin exposure/gain/white-balance to fixed values so the driver's
+    auto-exposure can't drift between (or during) runs.
+
+    Why this exists: with auto-exposure free-running, the same physical
+    scene produces different pixel values from one cycle to the next. That
+    feeds straight into the blackhat threshold in text_locator.py (an
+    absolute intensity cutoff) and into recognition confidence, so OCR
+    accuracy moves for reasons that have nothing to do with the product or
+    the code. Measured drift on this rig has been large enough to swamp the
+    code changes being A/B tested - accuracy moved from 92.5% to 75% within
+    a single uninterrupted session on one setup - which makes locking these
+    a prerequisite for any meaningful before/after comparison, not just a
+    nice-to-have.
+
+    Every setting is optional: a key left out of config (or set to null) is
+    simply not touched, so this can be adopted one property at a time.
+
+    IMPORTANT - the values are NOT portable. cv2.CAP_PROP_AUTO_EXPOSURE in
+    particular has no agreed meaning across backends: DirectShow, V4L2 and
+    individual driver builds each interpret it differently (0/1 vs
+    0.25/0.75 vs 1/3 all occur in the wild). That's why the "off" value is
+    config-driven rather than hardcoded, and why this function reads every
+    property back after writing it and logs both numbers. A silent mismatch
+    between requested and actual is the normal failure mode here - OpenCV
+    returns True from cap.set() for properties the driver quietly ignores -
+    so the read-back log is the only reliable evidence that a setting
+    actually took.
+    """
+    manual_cfg = cam_cfg.get("manual_settings") or {}
+    if not manual_cfg.get("enabled", False):
+        log.debug(
+            "Camera manual_settings disabled - exposure/gain left on driver auto. "
+            "Expect frame-to-frame brightness drift; see camera.manual_settings in config."
+        )
+        return
+
+    applied = []
+    mismatched = []
+
+    for key, prop, label in _MANUAL_PROPS:
+        requested = manual_cfg.get(key)
+        if requested is None:
+            continue
+        try:
+            cap.set(prop, float(requested))
+            actual = cap.get(prop)
+        except Exception as exc:
+            log.warning("Camera setting %s could not be applied: %s", label, exc)
+            continue
+
+        # Compare loosely - drivers routinely quantise a requested value to
+        # whatever step they actually support, which is fine. What matters
+        # is catching the case where the value didn't move at all.
+        if abs(actual - float(requested)) > max(1e-3, abs(float(requested)) * 0.25):
+            mismatched.append(f"{label}: requested={requested} actual={actual}")
+        else:
+            applied.append(f"{label}={actual}")
+
+    if applied:
+        log.info("Camera manual settings applied: %s", ", ".join(applied))
+    if mismatched:
+        log.warning(
+            "Camera manual settings NOT honoured by the driver (requested vs actual): %s. "
+            "This usually means the property is unsupported on this backend, or that "
+            "camera.manual_settings.auto_exposure needs a different value for this driver "
+            "(common alternatives: 0.25, 0, 1, 3). Exposure may still be drifting.",
+            "; ".join(mismatched),
+        )
+
+
 class _CaptureWorker(threading.Thread):
     """
     Owns exactly one cv2.VideoCapture instance and does nothing but read
@@ -308,6 +395,14 @@ class Camera:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
 
         if cap.isOpened():
+            # Applied after the capture is open (properties don't stick on a
+            # closed device) and re-applied on every reopen, since a
+            # reconnect resets the driver back to its own defaults - a lock
+            # that silently lapses after a camera hiccup would be worse than
+            # no lock at all, because the drift would look like a code
+            # regression.
+            _apply_manual_settings(cap, cam_cfg)
+
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             log.info(

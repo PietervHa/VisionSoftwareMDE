@@ -297,9 +297,66 @@ ocr:
 camera:
   device_name: "DFK 22BUC03" # <--- Change this to your camera's device name, Thanks to Peter for the tip'
   index: 0
+  # NOTE: the DFK 22BUC03 is a 744x480 sensor - it cannot deliver the
+  # 1280x1024 requested below, and every log line reports the 744x480 it
+  # actually negotiated. Harmless (the code logs what it got, not what it
+  # asked for), but the numbers here are aspirational rather than real.
+  # Left as-is so a different camera can still be dropped in.
   width: 1280
   height: 1024
   flip: -1
+
+  # Pin exposure/gain/white-balance so the driver's auto-exposure can't
+  # drift. With auto-exposure free-running, identical scenes produce
+  # different pixel values cycle to cycle, which feeds straight into
+  # text_locator.py's blackhat_threshold (an absolute intensity cutoff)
+  # and into recognition confidence - so OCR accuracy moves for reasons
+  # unrelated to the product or the code. That drift has been measured
+  # larger than the code differences being A/B tested, so locking these
+  # is a prerequisite for trustworthy before/after comparisons.
+  #
+  # Every value is optional - omit one (or set it to null) and that
+  # property is left untouched, so this can be adopted one at a time.
+  #
+  # HOW TO TUNE (expect to iterate - these numbers are camera- and
+  # lighting-specific, there are no universally correct values):
+  #   1. Set enabled: true and restart. Check the log for the line
+  #      "Camera manual settings applied: ..." - it prints what the driver
+  #      ACTUALLY accepted, which is not always what was requested.
+  #   2. If you instead see "Camera manual settings NOT honoured", the
+  #      auto_exposure value below is the usual culprit: this property has
+  #      no consistent meaning across backends. Try 0.25, then 0, then 1,
+  #      then 3, restarting each time, until the warning goes away.
+  #   3. With auto-exposure off, adjust exposure until the image looks
+  #      right in the web view. On DirectShow this is typically a negative
+  #      log2 value (-4 is brighter, -8 is darker); on other backends it
+  #      may be microseconds. Watch the live view rather than guessing.
+  #   4. Prefer raising exposure over raising gain - gain amplifies sensor
+  #      noise, and noise is exactly what the dot-matrix recognition is
+  #      already struggling with on the marginal characters.
+  #
+  # Alternative: The Imaging Source ships IC Capture, which can set and
+  # persist these at driver level for this camera. That works too, but
+  # settings here are version-controlled and survive a machine rebuild,
+  # whereas driver state doesn't.
+  manual_settings:
+    enabled: false
+
+    # Switches auto-exposure OFF. Backend-dependent, see step 2 above.
+    auto_exposure: 0.25
+
+    # Fixed exposure and gain once auto is off. Start with gain at 0.
+    exposure: -6
+    gain: 0
+
+    # White balance. Only matters because text_locator picks a colour
+    # channel; leaving WB on auto lets that channel's contrast wander.
+    auto_white_balance: 0
+    white_balance: null
+
+    # Usually best left untouched - adjust exposure first.
+    brightness: null
+    contrast: null
 
 # Object detection settings
 object_detection:
