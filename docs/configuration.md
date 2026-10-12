@@ -15,6 +15,8 @@ All settings are managed through `config/default.yaml`. Restart the application 
 | `ocr.engine` | `"tesseract"` | `"tesseract"` or `"paddleocr"` |
 | `ocr.preprocess` | `"fast"` | `"fast"` (~50ms) or `"accurate"` (~200ms) |
 | `ocr.inference_timeout_s` | `10` | PaddleOCR only: a call slower than this kills and restarts the OCR worker; the cycle is NOK with `failure_reason: ocr_engine_error` |
+| `ocr.dynamic_roi.dot_text.enabled` | `true` | OCRead only: remove ribs/mold lines by shape and re-render the print as dark text on white before recognition (replaces `derib_enabled`). Compare variants on real frames with `python -m QC_tools.compare_ocr_preprocessing` |
+| `ocr.dynamic_roi.dot_text.bridge_sigma_px` | `0.0` | Merge separate dots into strokes ("slight defocus" done in software). Try 0.5–1.0 on sharp frames |
 | `ocr.allowed_chars` | letters, digits, `" :/.-"` | PaddleOCR only: tokens without any of these are dropped; other disallowed characters become `?`. `""` disables the filter |
 | `camera.index` | `0` | USB camera index; run `tests/camera_test.py` to find yours |
 | `camera.flip` | `-1` | `0` = none, `1` = horizontal, `-1` = vertical |

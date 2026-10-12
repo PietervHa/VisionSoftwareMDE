@@ -267,11 +267,46 @@ ocr:
     # leading-digit accuracy problem - re-test with debug_save on and
     # judge it on whatever fraction of cycles actually have a rib crossing
     # the ink, not on the leading-digit problem as a whole.
-    derib_enabled: true
+    #
+    # 2026-10: turned OFF. Diagnosed on a real frame: the rib's shadow edge
+    # runs straight through the trailing "6" of "4113 08:26", and inpainting
+    # a band along that edge erased the 6's stroke with it - which is where
+    # the frequent "4113 08:2" reads came from. Superseded by dot_text below,
+    # which removes ribs by shape and keeps ink printed on them. (Ignored
+    # anyway while dot_text.enabled is true.)
+    derib_enabled: false
     derib_blackhat_kernel: 25
     derib_threshold: 32
     derib_min_length_frac: 0.4
     derib_thickness: 7
+
+    # Dot-text cleanup (see backend/detection/ocr/dot_text.py). Separates
+    # the print from the plastic by shape: removes every straight structure
+    # longer than line_min_length_px (rib edges, mold lines), keeps the
+    # short dots/strokes - including ones printed on top of a rib - and
+    # re-renders them as dark text on white, normalised per region so faint
+    # parts of the print aren't lost. Replaces derib and CLAHE for OCRead.
+    #
+    # Measured on the 4113 08:26 / BB 05/26 reference frame (rotated cap
+    # orientations, two camera scales, low-contrast and noisy variants;
+    # PP-OCRv4 as a stand-in recognizer): exact reads 3/44 -> 44/44, and
+    # 1/32 -> 30/32 on held-out tilts. One bottle so far - compare on your
+    # own frames with QC_tools/compare_ocr_preprocessing.py.
+    #
+    # Pixel values are at camera resolution, before any upscaling.
+    dot_text:
+      enabled: true
+      ink_kernel_px: 19         # wider than a dot/stroke, narrower than shading
+      line_min_length_px: 65    # > ~2.5 character heights, < visible rib length in the crop
+      line_angles: 36           # directions checked (every 5 deg); 12 left rib remnants that turned 6 into 5
+      local_window_px: 21       # ~1 character height
+      min_ref_frac: 0.4
+      ink_floor: 0.1            # 0.05-0.15 all scored well; 0.35 lost most of the print
+      # "Slight defocus reads better" in software: merges separate dots into
+      # strokes, applied only to the cleaned text. 0 = off. Did not help on
+      # the reference frame (dots already merged there); worth trying 0.5-1.0
+      # on sharp frames where individual dots are visible.
+      bridge_sigma_px: 0.0
 
     # Orientation retry - re-runs recognition on a 180-degree-flipped copy
     # of the crop, since deskew_crop() only resolves line tilt, not

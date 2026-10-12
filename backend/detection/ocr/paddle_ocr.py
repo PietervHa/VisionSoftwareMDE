@@ -16,6 +16,7 @@ from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
 from backend.detection.ocr.text_locator import locate_text_region, deskew_crop
+from backend.detection.ocr.dot_text import clean_dot_text
 
 log = get_logger(__name__)
 
@@ -84,6 +85,18 @@ class PaddleOCR:
         self.derib_min_length_frac = float(dynamic_roi_cfg.get("derib_min_length_frac", 0.6))
         self.derib_thickness = int(dynamic_roi_cfg.get("derib_thickness", 7))
 
+        # Dot-text cleanup (OCRead / dynamic ROI only) - see dot_text.py.
+        # Removes ribs/mold lines by shape instead of inpainting over them,
+        # so ink printed on a rib survives, and re-renders the print as dark
+        # text on white. When enabled it replaces both _derib_crop() (which
+        # erased the stroke of a character sitting on a rib edge) and the
+        # CLAHE step of _preprocess_image() for OCRead crops.
+        dot_text_cfg = dynamic_roi_cfg.get("dot_text") if isinstance(dynamic_roi_cfg.get("dot_text"), dict) else {}
+        self.dot_text_enabled = bool(dot_text_cfg.get("enabled", False))
+        self.dot_text_cfg = dot_text_cfg
+        if self.dot_text_enabled and self.derib_enabled:
+            log.info("ocr.dynamic_roi.dot_text is enabled, so derib_enabled is ignored for OCRead crops.")
+
         # Orientation retry (OCRead / dynamic ROI only): deskew_crop()
         # resolves *which way* a rotated line is tilted, but not whether
         # it came out upside-down (0 vs 180 degrees) - that ambiguity is
@@ -140,12 +153,13 @@ class PaddleOCR:
 
         log.debug(
             "PaddleOCR init: preprocess_mode=%s downscale=%s keywords=%s derib_enabled=%s "
-            "orientation_retry_enabled=%s",
+            "orientation_retry_enabled=%s dot_text_enabled=%s",
             self.preprocess_mode,
             self.downscale,
             self.keywords,
             self.derib_enabled,
             self.orientation_retry_enabled,
+            self.dot_text_enabled,
         )
 
     def warmup(self) -> None:
@@ -506,7 +520,8 @@ class PaddleOCR:
         roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
         profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
-        if dynamic_roi and self.derib_enabled:
+        use_dot_text = dynamic_roi and self.dot_text_enabled
+        if dynamic_roi and self.derib_enabled and not use_dot_text:
             t_derib = time.perf_counter()
             roi_frame = self._derib_crop(roi_frame)
             profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
@@ -531,7 +546,10 @@ class PaddleOCR:
                 log.warning("Raw crop debug write failed (non-fatal): %s", exc)
 
         t1b = time.perf_counter()
-        roi_frame = self._preprocess_image(roi_frame)
+        if use_dot_text:
+            roi_frame = clean_dot_text(roi_frame, self.dot_text_cfg)
+        else:
+            roi_frame = self._preprocess_image(roi_frame)
         profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
 
         debug_enabled = log.isEnabledFor(logging.DEBUG)
