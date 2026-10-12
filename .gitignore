@@ -129,3 +129,4 @@ data/
 
 # Python bytecode caches (any location, not just backend/frontend/tests)
 __pycache__/
+/.venv/
