@@ -10,7 +10,8 @@ import re
 import time
 import logging
 import os
-from backend.detection.ocr.paddle_worker import PaddleOCRWorker
+import string
+from backend.detection.ocr.paddle_worker import PaddleOCRWorker, PaddleWorkerError
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
@@ -19,6 +20,10 @@ from backend.detection.ocr.text_locator import locate_text_region, deskew_crop
 log = get_logger(__name__)
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
+
+# Characters OCR output is allowed to contain unless ocr.allowed_chars
+# overrides it - see _sanitize_candidates().
+DEFAULT_ALLOWED_CHARS = string.ascii_letters + string.digits + " :/.-"
 
 
 class PaddleOCR:
@@ -35,6 +40,7 @@ class PaddleOCR:
             enable_mkldnn=bool(ocr_cfg.get("enable_mkldnn", True)),
             text_detection_model_name=ocr_cfg.get("text_detection_model_name") or None,
             text_recognition_model_name=ocr_cfg.get("text_recognition_model_name") or None,
+            inference_timeout=float(ocr_cfg.get("inference_timeout_s", 10.0)),
         )
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.keyword_set = set(self.keywords)
@@ -119,6 +125,16 @@ class PaddleOCR:
         # doesn't say whether the time went into Paddle's own compute or
         # somewhere it shouldn't have.
         self.slow_cycle_log_threshold_ms = float(ocr_cfg.get("slow_cycle_log_threshold_ms", 800))
+
+        # Output character filter - see _sanitize_candidates(). Once
+        # text_detection/recognition_model_name are pinned, PaddleOCR
+        # ignores lang="en" and the recognizer uses its full multilingual
+        # dictionary, so noise on the cap regularly comes back as CJK
+        # characters (seen in the results DB: 心, 门, 一, 日). Those were
+        # then sent to the PLC as multi-byte UTF-8. An empty/null
+        # ocr.allowed_chars disables the filter.
+        allowed_chars = ocr_cfg.get("allowed_chars", DEFAULT_ALLOWED_CHARS)
+        self._allowed_chars = frozenset(str(allowed_chars)) if allowed_chars else None
 
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
@@ -398,6 +414,35 @@ class PaddleOCR:
         except Exception as exc:  # pragma: no cover - debug aid only, never fatal
             log.warning("OCR result debug write failed (non-fatal): %s", exc)
 
+    def _sanitize_candidates(self, candidates):
+        """Restrict OCR output to the characters the print can contain.
+
+        - A candidate with no allowed (non-space) characters at all is
+          dropped: it's a noise token (typically a lone CJK character the
+          multilingual recognizer produced from a speck or embossing).
+        - A candidate that is mostly valid but contains disallowed
+          characters keeps its length, with each disallowed character
+          replaced by "?". Deliberately NOT simply deleted: deleting could
+          turn a smudged/misprinted code into a string that happens to
+          match the expected value on the PLC (a false accept). A "?"
+          guarantees an exact-match comparison fails, so the product is
+          rejected - the safe direction for an inspection system.
+        """
+        allowed = self._allowed_chars
+        if not allowed:
+            return candidates
+        cleaned = []
+        for cand in candidates:
+            text = str(cand.get("text", ""))
+            if not any(ch in allowed and not ch.isspace() for ch in text):
+                log.debug("OCR output filter: dropped token %r (no allowed characters)", text)
+                continue
+            filtered = "".join(ch if ch in allowed else "?" for ch in text).strip()
+            if filtered != text:
+                log.debug("OCR output filter: %r -> %r", text, filtered)
+            cleaned.append({**cand, "text": filtered})
+        return cleaned
+
     @staticmethod
     def _score_candidates(candidates):
         """Aggregate score used to compare two candidate sets (a crop vs
@@ -428,8 +473,14 @@ class PaddleOCR:
         """
         Shared pipeline: ROI, downscale, and the actual PaddleOCR inference call.
 
-        Returns every text candidate PaddleOCR produced (unfiltered), along
-        with timing info. Both `run()` (keyword match, for the OCR mode) and
+        Returns (candidates, elapsed_ms, profile_data, engine_error):
+        every text candidate PaddleOCR produced (no keyword filtering, but
+        restricted to ocr.allowed_chars - see _sanitize_candidates), timing
+        info, and engine_error - None normally, or a message when the OCR
+        engine itself failed, in which case candidates is empty and the
+        caller must report a technical failure rather than "no text".
+
+        Both `run()` (keyword match, for the OCR mode) and
         `read()` (raw read-out, for the OCRead mode) build on this so the
         downscale/preprocessing/inference path is identical between the two
         modes — only the ROI step differs, via dynamic_roi (OCRead only).
@@ -490,18 +541,30 @@ class PaddleOCR:
         start_time = time.perf_counter()
 
         t2 = start_time
+        # engine_error is set when the OCR engine itself failed (worker
+        # down, hung, crashed, raised). It is returned to run()/read(),
+        # which put it in the result's "error" field so vision.py reports
+        # NOK with failure_reason="ocr_engine_error". Previously this was
+        # swallowed into an empty candidate list, which made a dead engine
+        # indistinguishable from a bottle with no print on it.
+        engine_error = None
         try:
             # paddle_worker.py parses PaddleOCR's own result object inside
             # the worker process now (see its module docstring) and hands
             # back a plain list of {"text", "confidence"} dicts - nothing
             # further to unpack here regardless of which PaddleOCR version
             # produced it.
-            candidates = self._paddle.ocr(roi_frame) or []
+            candidates = self._sanitize_candidates(self._paddle.ocr(roi_frame) or [])
             if debug_enabled:
                 log.debug("PaddleOCR result count=%s", len(candidates))
+        except PaddleWorkerError as e:
+            log.error("PaddleOCR engine failure: %s", e)
+            candidates = []
+            engine_error = str(e)
         except Exception as e:
             log.error("PaddleOCR.ocr() failed: %s", e, exc_info=True)
             candidates = []
+            engine_error = f"{type(e).__name__}: {e}"
 
         profile_data["ocr_ms"] = round((time.perf_counter() - t2) * 1000, 3)
 
@@ -512,7 +575,9 @@ class PaddleOCR:
         # upright read never takes this branch.
         used_flipped = False
         retry_audit = None
-        if dynamic_roi and self.orientation_retry_enabled:
+        # Never retry after an engine failure: the flipped pass would hit the
+        # same broken engine and just double the time this cycle takes.
+        if dynamic_roi and self.orientation_retry_enabled and engine_error is None:
             should_retry = not candidates
             if self.orientation_retry_require_low_confidence and candidates:
                 worst_conf = min(c["confidence"] for c in candidates)
@@ -523,9 +588,16 @@ class PaddleOCR:
                 flipped_frame = None
                 try:
                     flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
-                    flipped_candidates = self._paddle.ocr(flipped_frame) or []
+                    flipped_candidates = self._sanitize_candidates(self._paddle.ocr(flipped_frame) or [])
                 except Exception as exc:
-                    log.warning("Orientation retry failed (non-fatal): %s", exc)
+                    flipped_frame = None
+                    if not candidates:
+                        # Nothing usable from the first pass and the engine
+                        # failed on the second: we can't claim "no text".
+                        log.error("Orientation retry failed and first pass was empty: %s", exc)
+                        engine_error = f"orientation retry failed: {exc}"
+                    else:
+                        log.warning("Orientation retry failed (non-fatal, keeping first pass): %s", exc)
                 profile_data["orientation_retry_ms"] = round((time.perf_counter() - t_retry) * 1000, 3)
 
                 # Record BOTH sides of the comparison, not just the winner.
@@ -574,7 +646,7 @@ class PaddleOCR:
                 ] + ([retry_audit] if retry_audit else []),
             )
 
-        return candidates, elapsed_ms, profile_data
+        return candidates, elapsed_ms, profile_data, engine_error
 
     def run(self, frame, profile=False):
         """
@@ -584,7 +656,7 @@ class PaddleOCR:
         configured/active keyword (and date pattern) here, and only matching
         candidates are returned as detections.
         """
-        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile)
+        candidates, elapsed_ms, profile_data, engine_error = self._recognize(frame, profile=profile)
 
         keywords = (
             [self.app_state.get_ocr_keyword()]
@@ -621,6 +693,8 @@ class PaddleOCR:
             "mode": "ocr",
             "searched_word": searched_word
         }
+        if engine_error:
+            result["error"] = engine_error
 
         if profile:
             result["_profile_ms"] = profile_data
@@ -640,7 +714,7 @@ class PaddleOCR:
         this is the mode that needs to track the text wherever it actually
         printed on each bottle - see _apply_roi().
         """
-        candidates, elapsed_ms, profile_data = self._recognize(frame, profile=profile, dynamic_roi=True)
+        candidates, elapsed_ms, profile_data, engine_error = self._recognize(frame, profile=profile, dynamic_roi=True)
 
         processing_time_ms = round(elapsed_ms, 1)
         full_text = " ".join(c["text"] for c in candidates).strip()
@@ -656,6 +730,8 @@ class PaddleOCR:
             "processing_time_ms": processing_time_ms,
             "mode": "ocread",
         }
+        if engine_error:
+            result["error"] = engine_error
 
         if profile:
             result["_profile_ms"] = profile_data

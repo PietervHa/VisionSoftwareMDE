@@ -36,6 +36,10 @@ class TCPTriggerServer:
         self.trigger_byte = int(trig_cfg.get("trigger_byte", "0x01"), 16)
         self.response_ok = trig_cfg.get("response_ok", "OK\n").encode()
         self.response_nok = trig_cfg.get("response_nok", "NOK\n").encode()
+        # OCRead only: longest text (in bytes, excluding the trailing
+        # newline) that will be sent to the PLC. Anything longer is turned
+        # into a NOK instead - see _apply_text_length_limit().
+        self.max_text_length = int(trig_cfg.get("max_text_length", 64))
 
         self._server_thread = None
         self._stop_event = threading.Event()
@@ -129,6 +133,46 @@ class TCPTriggerServer:
             finally:
                 logger.info("PLC disconnected: %s", addr)
 
+    @staticmethod
+    def _ocread_text(result: dict) -> str:
+        """The text an OCRead result would send to the PLC, on one line."""
+        text = result.get("text")
+        if not text:
+            # Fall back to reconstructing from detections if "text" is
+            # missing for some reason (e.g. a non-standard OCR engine).
+            text = " ".join(
+                str(d.get("text", ""))
+                for d in result.get("detections", [])
+                if isinstance(d, dict)
+            ).strip()
+        # The response is newline-terminated, so the text itself must never
+        # contain a line break or the PLC would see two responses.
+        return " ".join(str(text).split())
+
+    def _apply_text_length_limit(self, result: dict) -> dict:
+        """Turn an over-long OCRead read into a NOK before it is recorded
+        or sent.
+
+        A read far longer than the printed code means OCR picked up a lot
+        of extra clutter (typically the full-frame fallback when the text
+        locator found nothing), and it could overrun the PLC's receive
+        buffer. Truncating instead would be unsafe - the cut could happen
+        to leave exactly the expected string and cause a false accept - so
+        the product is rejected. Done here, before process_result_fn, so
+        the stored result matches what the PLC actually received.
+        """
+        if result.get("mode") != "ocread" or result.get("status") != "OK":
+            return result
+        text = self._ocread_text(result)
+        length = len(text.encode("utf-8", errors="replace"))
+        if self.max_text_length > 0 and length > self.max_text_length:
+            logger.warning(
+                "OCRead text is %d bytes (limit trigger.max_text_length=%d); sending NOK instead: %r",
+                length, self.max_text_length, text,
+            )
+            return {**result, "status": "NOK", "failure_reason": "text_too_long"}
+        return result
+
     def _build_response(self, result: dict) -> bytes:
         """
         Builds the byte response sent back to the PLC for a completed vision
@@ -144,16 +188,7 @@ class TCPTriggerServer:
         an empty/garbled string as a "no match".
         """
         if result.get("mode") == "ocread" and result.get("status") == "OK":
-            text = result.get("text")
-            if not text:
-                # Fall back to reconstructing from detections if "text" is
-                # missing for some reason (e.g. a non-standard OCR engine).
-                text = " ".join(
-                    str(d.get("text", ""))
-                    for d in result.get("detections", [])
-                    if isinstance(d, dict)
-                ).strip()
-            return (str(text) + "\n").encode("utf-8", errors="replace")
+            return (self._ocread_text(result) + "\n").encode("utf-8", errors="replace")
 
         return self.response_ok if result.get("status") == "OK" else self.response_nok
 
@@ -250,7 +285,7 @@ class TCPTriggerServer:
 
             return self.response_nok
 
-        result = result_holder[0]
+        result = self._apply_text_length_limit(result_holder[0])
 
         self.process_result_fn(result, trigger_time)
 

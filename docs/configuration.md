@@ -14,11 +14,14 @@ All settings are managed through `config/default.yaml`. Restart the application 
 | `object_detection.backend` | `"classifier"` | `"classifier"`, `"yolo"`, `"template"`, or `"roboflow"` |
 | `ocr.engine` | `"tesseract"` | `"tesseract"` or `"paddleocr"` |
 | `ocr.preprocess` | `"fast"` | `"fast"` (~50ms) or `"accurate"` (~200ms) |
+| `ocr.inference_timeout_s` | `10` | PaddleOCR only: a call slower than this kills and restarts the OCR worker; the cycle is NOK with `failure_reason: ocr_engine_error` |
+| `ocr.allowed_chars` | letters, digits, `" :/.-"` | PaddleOCR only: tokens without any of these are dropped; other disallowed characters become `?`. `""` disables the filter |
 | `camera.index` | `0` | USB camera index; run `tests/camera_test.py` to find yours |
 | `camera.flip` | `-1` | `0` = none, `1` = horizontal, `-1` = vertical |
 | `trigger.enabled` | `false` | Set to `true` to activate TCP trigger for PLC |
 | `trigger.port` | `5001` | Port the PLC connects to |
 | `trigger.timeout_s` | `5.0` | Seconds to wait for result before responding NOK |
+| `trigger.max_text_length` | `64` | OCRead only: reads longer than this (bytes) are sent as NOK with `failure_reason: text_too_long` |
 | `hmi.enable_video_feed` | `true` | Disable to reduce CPU/bandwidth |
 | `web.port` | `5000` | Port for the web dashboard |
 

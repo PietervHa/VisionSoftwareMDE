@@ -74,6 +74,23 @@ ocr:
   # instead.
   slow_cycle_log_threshold_ms: 800
 
+  # PaddleOCR only: longest a single inference call may take before the
+  # worker process is treated as hung, terminated and restarted on the next
+  # cycle (the cycle itself is reported NOK with failure_reason
+  # "ocr_engine_error"). Normal calls are well under 1s and the slowest
+  # recorded spike was ~3.3s, so 10s only fires on a genuinely stuck
+  # worker. Keep this above anything a legitimate cycle can take; note the
+  # PLC already gets its NOK after trigger.timeout_s regardless.
+  inference_timeout_s: 10
+
+  # PaddleOCR only: characters OCR output may contain. Tokens with none of
+  # these are dropped as noise; any other disallowed character inside a
+  # token is replaced with "?" so the PLC comparison fails safely instead of
+  # silently matching. Needed because pinning the model names below makes
+  # PaddleOCR ignore lang="en" and use its multilingual dictionary, which
+  # turns specks into CJK characters. Set to "" to disable the filter.
+  allowed_chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 :/.-'
+
   # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration.
   #
   # true here assumes paddlepaddle==3.2.2 (not 3.3.x) - see the pip
@@ -438,6 +455,7 @@ trigger:
   response_ok: "OK\n"   # Response sent back on OK result ("ocr" / "object_detection" modes)
   response_nok: "NOK\n" # Response sent back on NOK result, and on any camera/vision failure
   timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
+  max_text_length: 64   # "ocread" only: longer reads are sent as NOK (failure_reason text_too_long); keep <= the PLC receive buffer
   # In "ocread" mode no OK/NOK judgement is made here at all: the raw text
   # read from the product is sent back instead (newline-terminated), and the
   # PLC is responsible for comparing it against the expected value.
