@@ -261,15 +261,7 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
             dtype=np.float32,
         )
     (rcx, rcy), (rw, rh), angle = cv2.minAreaRect(points)
-
-    # minAreaRect doesn't know which side is the text baseline - normalize
-    # so the box is always "landscape" (width = baseline direction). Without
-    # this, a near-vertical line of text would keep its short side reported
-    # as width, and downstream deskewing would rotate it 90 degrees the
-    # wrong way.
-    if rw < rh:
-        rw, rh = rh, rw
-        angle += 90.0
+    rw, rh, angle = _normalize_rect_angle(rw, rh, angle)
 
     rw += 2 * padding
     rh += 2 * padding
@@ -299,6 +291,46 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     return {"bbox": bbox, "rotated_rect": rotated_rect, "score": score, "cycle_debug_dir": cycle_debug_dir}
 
 
+def _normalize_rect_angle(rw: float, rh: float, angle: float) -> tuple[float, float, float]:
+    """
+    Normalize a cv2.minAreaRect() (width, height, angle) so that:
+
+      1. the box is "landscape" (width = baseline direction), and
+      2. the angle is the *smallest* rotation that levels the line,
+         i.e. it lies in (-90, 90].
+
+    (1) matters because minAreaRect doesn't know which side is the text
+    baseline - without it a near-vertical line would keep its short side as
+    width and deskew_crop() would rotate it 90 degrees the wrong way.
+
+    (2) is a bug fix. Rotating by `angle` or by `angle - 180` both make the
+    line horizontal; they differ only in whether the text ends up upright
+    or upside-down. OpenCV reports minAreaRect angles in (0, 90], so after
+    the +90 landscape swap the angle used to land anywhere in (0, 180].
+    That meant every line tilted counter-clockwise - even by 2 degrees -
+    was "levelled" by turning it ~178 degrees, i.e. handed to OCR upside
+    down, while the same tilt clockwise came out upright. (Below
+    deskew_crop's 1.5 degree snap tolerance no rotation happens at all, so
+    the result also flipped back and forth around that threshold.) Taking
+    the smaller of the two turns means any line within +/-90 degrees of
+    upright always comes out upright; only text that is genuinely more
+    than 90 degrees rotated comes out flipped, which is what the
+    orientation retry in paddle_ocr.py and PaddleOCR's textline
+    orientation classifier are for.
+    """
+    if rw < rh:
+        rw, rh = rh, rw
+        angle += 90.0
+    # Bring into (-90, 90]. A single step is enough for OpenCV >= 4.5.1
+    # (angle in (0, 90] + optional 90), but loop anyway so older/newer
+    # angle conventions can't silently reintroduce the flip.
+    while angle > 90.0:
+        angle -= 180.0
+    while angle <= -90.0:
+        angle += 180.0
+    return rw, rh, angle
+
+
 def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0) -> Optional[np.ndarray]:
     """
     Straighten and crop *frame* to the rotated rect returned by
@@ -322,12 +354,14 @@ def deskew_crop(frame: np.ndarray, rotated_rect: dict, extra_padding_px: int = 0
     the rect.
 
     Note on orientation: minAreaRect's angle is only defined up to 180
-    degrees, so this can hand back text that reads correctly but is
-    upside-down in the frame. That residual 0/180 ambiguity is exactly
-    what PaddleOCR's use_angle_cls is for - it classifies coarse
-    orientation, it isn't meant to correct arbitrary continuous rotation
-    on its own. The two stages are complementary: this function handles
-    "which way is the text tilted", angle_cls handles "is it upside down".
+    degrees. locate_text_region() resolves that by always taking the
+    smaller rotation (see _normalize_rect_angle), so text within +/-90
+    degrees of upright always comes out upright. Text rotated by more than
+    that (a cap that is genuinely upside-down under the camera) still
+    comes out upside-down - that residual case is what PaddleOCR's
+    use_angle_cls and the orientation retry in paddle_ocr.py are for. The
+    stages are complementary: this function handles "which way is the text
+    tilted", the later stages handle "is it upside down".
 
     Returns None if the rect is degenerate or falls entirely outside frame.
     """
