@@ -87,6 +87,7 @@ unable to recover at all.
 """
 
 import cv2
+import logging
 import numpy as np
 import threading
 import time
@@ -97,9 +98,12 @@ from backend.utils.logger import get_logger
 log = get_logger(__name__)
 TARGET = 1 / 30  # Target time per frame for ~30 FPS
 
-# Cached across calls so a missing pygrabber install (or a lookup failure)
-# is only logged once instead of spamming every reconnect attempt.
+# Cached across calls so a missing pygrabber install is only logged once
+# instead of spamming every reconnect attempt.
 _device_name_lookup_warned = False
+# True while device enumeration keeps failing, so the error is logged once
+# per failure streak rather than on every reconnect attempt (up to every 2s).
+_device_enum_failing = False
 
 # How long we tolerate zero fresh frames before treating the camera as
 # stalled/disconnected. Set comfortably above the sub-second read hiccups
@@ -123,6 +127,64 @@ RECONNECT_MIN_INTERVAL = 0.25
 RECONNECT_MAX_INTERVAL = 2.0
 
 
+# How long a single device enumeration may take before it's abandoned and
+# treated as a failed lookup (the reconnect loop will simply try again).
+DEVICE_ENUM_TIMEOUT_S = 5.0
+
+
+def _enumerate_dshow_devices(timeout_s=DEVICE_ENUM_TIMEOUT_S):
+    """
+    Returns the friendly names of the currently connected DirectShow video
+    devices, in DirectShow enumeration order (= the index cv2.CAP_DSHOW
+    uses). Raises on failure.
+
+    The enumeration runs on its own short-lived helper thread that
+    initialises COM for itself. pygrabber is a COM client, and COM must be
+    initialised on every thread that uses it. _resolve_camera_index() is
+    called from the main thread at startup, where comtypes initialised COM
+    as a side effect of being imported, but every *reconnect* runs on a
+    fresh _spawn_worker thread that never initialised COM - which is the
+    "[WinError -2147221008] CoInitialize is niet aangeroepen"
+    (CO_E_NOTINITIALIZED) seen in vision.log on 2026-09-03. Using a
+    dedicated thread (instead of initialising COM on the spawn thread
+    itself) keeps the COM apartment of the thread that then opens the
+    OpenCV capture exactly as it was before.
+    """
+    result = {}
+
+    def _worker():
+        import gc
+        import comtypes
+        initialised = False
+        try:
+            comtypes.CoInitialize()
+            initialised = True
+            from pygrabber.dshow_graph import FilterGraph
+            graph = FilterGraph()
+            result["devices"] = [str(name) for name in graph.get_input_devices()]
+            # Release every COM pointer before CoUninitialize below -
+            # releasing them afterwards can crash the process.
+            del graph
+            gc.collect()
+        except BaseException as exc:  # reported to the caller, never raised in this thread
+            result["error"] = exc
+        finally:
+            if initialised:
+                try:
+                    comtypes.CoUninitialize()
+                except Exception:
+                    pass
+
+    t = threading.Thread(target=_worker, name="camera-device-enum", daemon=True)
+    t.start()
+    t.join(timeout_s)
+    if t.is_alive():
+        raise TimeoutError(f"camera device enumeration did not finish within {timeout_s:.1f}s")
+    if "error" in result:
+        raise result["error"]
+    return result["devices"]
+
+
 def _resolve_camera_index(cam_cfg):
     """
     Decides which numeric camera index to open this attempt.
@@ -133,36 +195,59 @@ def _resolve_camera_index(cam_cfg):
     and unplugged. Returns the index of the device whose friendly name
     contains device_name (case-insensitive).
 
-    If no currently-connected device matches, returns None. Callers must
-    treat None as "don't open anything" rather than falling back to a
-    bare numeric index - falling back is exactly what lets an unrelated
-    camera (e.g. a laptop's built-in webcam) get silently opened once the
-    real device disappears and indices renumber.
+    Returns None - meaning "don't open anything this attempt" - when no
+    currently-connected device matches, AND when the enumeration itself
+    fails. Callers must never fall back to a bare numeric index in either
+    case: that is exactly what lets an unrelated camera (e.g. a laptop's
+    built-in webcam) get silently opened once the real device disappears
+    and indices renumber. (Before this fix a failed enumeration did fall
+    back to camera.index; on 2026-09-03 08:21 that opened a 1280x720
+    device, which can't be the 744x480 DFK.) The reconnect loop retries
+    with backoff, so a transient enumeration failure just delays the
+    reconnect.
 
-    If device_name isn't set, or we're not on Windows, or the lookup
-    itself fails (e.g. pygrabber not installed), falls back to the plain
-    numeric cam_cfg["index"] - the old, simple behaviour.
+    Falls back to the plain numeric cam_cfg["index"] only when device_name
+    isn't set, when not on Windows, or when pygrabber isn't installed at
+    all (then name lookup can never work, and refusing to open any camera
+    would make the app unusable - this is logged as an error once).
     """
-    global _device_name_lookup_warned
+    global _device_name_lookup_warned, _device_enum_failing
     device_name = (cam_cfg.get("device_name") or "").strip()
     if not device_name or sys.platform != "win32":
         return cam_cfg["index"]
 
     try:
-        from pygrabber.dshow_graph import FilterGraph
-        devices = FilterGraph().get_input_devices()
-    except Exception as exc:
+        # Imported here, on the calling thread, exactly as before - the
+        # first import (from the main thread at startup) is what lets
+        # comtypes initialise COM on the main thread.
+        import pygrabber.dshow_graph  # noqa: F401
+    except ImportError as exc:
         if not _device_name_lookup_warned:
             log.error(
-                "Could not enumerate camera devices to resolve "
-                "camera.device_name=%r (%s). Falling back to numeric "
-                "camera.index=%s, which may open the wrong camera (e.g. a "
-                "laptop's built-in webcam) if the USB camera renumbers. "
-                "Install pygrabber to fix this: pip install pygrabber",
+                "pygrabber is not installed, so camera.device_name=%r cannot be "
+                "resolved (%s). Falling back to numeric camera.index=%s, which may "
+                "open the wrong camera (e.g. a laptop's built-in webcam) if the USB "
+                "camera renumbers. Install it with: pip install pygrabber",
                 device_name, exc, cam_cfg["index"],
             )
             _device_name_lookup_warned = True
         return cam_cfg["index"]
+
+    try:
+        devices = _enumerate_dshow_devices()
+    except Exception as exc:
+        log.log(
+            logging.DEBUG if _device_enum_failing else logging.ERROR,
+            "Could not enumerate camera devices to resolve camera.device_name=%r "
+            "(%s: %s). Not opening any camera until this succeeds; retrying.",
+            device_name, type(exc).__name__, exc,
+        )
+        _device_enum_failing = True
+        return None
+
+    if _device_enum_failing:
+        log.info("Camera device enumeration working again.")
+        _device_enum_failing = False
 
     for idx, name in enumerate(devices):
         if device_name.lower() in name.lower():
@@ -383,8 +468,8 @@ class Camera:
             # is exactly how a laptop's built-in webcam gets grabbed by
             # accident once the USB camera disappears and indices shift.
             log.warning(
-                "USB camera device_name=%r not found among connected "
-                "cameras; waiting for it to be plugged in.",
+                "USB camera device_name=%r not available (not connected, or the "
+                "device lookup failed - see above); waiting for it.",
                 cam_cfg.get("device_name", ""),
             )
             return cv2.VideoCapture()

@@ -124,8 +124,14 @@ FAKE_CV2.rotate = lambda frame, code: frame
 FAKE_CV2.ROTATE_90_CLOCKWISE = 0
 FAKE_CV2.ROTATE_180 = 1
 FAKE_CV2.ROTATE_90_COUNTERCLOCKWISE = 2
-
-sys.modules["cv2"] = FAKE_CV2
+# Referenced at import time by camera.py's manual-settings table.
+FAKE_CV2.CAP_PROP_AUTO_EXPOSURE = 21
+FAKE_CV2.CAP_PROP_EXPOSURE = 15
+FAKE_CV2.CAP_PROP_GAIN = 14
+FAKE_CV2.CAP_PROP_AUTO_WB = 44
+FAKE_CV2.CAP_PROP_WB_TEMPERATURE = 45
+FAKE_CV2.CAP_PROP_BRIGHTNESS = 10
+FAKE_CV2.CAP_PROP_CONTRAST = 11
 
 backend_utils = types.ModuleType("backend.utils")
 config_loader_mod = types.ModuleType("backend.core.config_loader")
@@ -136,12 +142,36 @@ config_loader_mod.cfg = {
 }
 logger_mod.get_logger = lambda name: MagicMock()
 
-sys.modules["backend.utils"] = backend_utils
-sys.modules["backend.core.config_loader"] = config_loader_mod
-sys.modules["backend.utils.logger"] = logger_mod
+# Load camera.py as a private copy with the fakes above, then put
+# sys.modules back exactly as it was. Previously the fakes were installed
+# globally for the rest of the process, so under `unittest discover` every
+# test module imported afterwards got the fake cv2 / backend.utils (and a
+# test module imported *before* this one made `from backend.core import
+# camera` return the real module, bypassing FakeVideoCapture entirely).
+import importlib.util  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from backend.core import camera as camera_module  # noqa: E402
+_FAKE_MODULES = {
+    "cv2": FAKE_CV2,
+    "backend.utils": backend_utils,
+    "backend.core.config_loader": config_loader_mod,
+    "backend.utils.logger": logger_mod,
+}
+_saved_modules = {name: sys.modules.get(name) for name in _FAKE_MODULES}
+sys.modules.update(_FAKE_MODULES)
+try:
+    _spec = importlib.util.spec_from_file_location(
+        "_camera_under_test",
+        Path(__file__).resolve().parents[1] / "backend" / "core" / "camera.py",
+    )
+    camera_module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(camera_module)
+finally:
+    for _name, _mod in _saved_modules.items():
+        if _mod is None:
+            sys.modules.pop(_name, None)
+        else:
+            sys.modules[_name] = _mod
 
 
 def wait_until(predicate, timeout=3.0, interval=0.02):
