@@ -130,7 +130,3 @@ data/
 # Python bytecode caches (any location, not just backend/frontend/tests)
 __pycache__/
 /.venv/
-/tests/fixtures/
-/backend/detection/ocr/models/verification/
-/backend/detection/ocr/models/font_reader.npz
-/backend/detection/ocr/models/
