@@ -81,6 +81,9 @@ DEFAULTS = {
     #   "subtract" - ink map minus rib darkness (first version). Ink lying
     #                in a rib shadow loses part of its contrast.
     "illumination": "divide",
+    # 0 = same small-crop rule as the classic preprocessing (usually 2x);
+    # a fixed factor (e.g. 3) is used for extra-resolution reads.
+    "upscale": 0,
 }
 
 _kernel_cache: dict = {}
@@ -165,7 +168,7 @@ def clean_dot_text(crop: np.ndarray, cfg: dict | None = None, debug: dict | None
         floor = float(p["ink_floor"])
         norm = np.clip((text_ink / ref - floor) / max(1e-6, 1.0 - floor), 0, 1)
 
-    scale = upscale_factor(min(gray.shape[:2]))
+    scale = int(p["upscale"]) if int(p["upscale"] or 0) > 0 else upscale_factor(min(gray.shape[:2]))
     if scale != 1:
         norm = cv2.resize(norm, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 

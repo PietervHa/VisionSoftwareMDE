@@ -101,6 +101,32 @@ ocr:
   # canonical code, e.g. "4113 08:26 BB 05/26" (always this spacing).
   read_validation:
     enabled: true
+    # Which reader produces the code:
+    #   font   - classifier trained on this printer's 5x7 dot font, including
+    #            characters with a cap rib through them (font_reader.py).
+    #            Leave-one-bottle-out test on 83 real frames: 73 correct,
+    #            6 wrong, 4 rejected (PaddleOCR on the same bottles mostly read
+    #            the 6 under the rib as 5). ~0.4 s per bottle.
+    #   paddle - PaddleOCR with the consensus settings below (previous).
+    reader: paddle               # font = trained dot-font reader (parked: it fills covered/missing digits)
+    font_reader:
+      model: ''                   # '' = backend/detection/ocr/models/font_reader.npz
+      # To check on the line that it READS rather than recalls known codes:
+      # models/verification/font_reader_without_<bottle>.npz were trained
+      # WITHOUT that bottle (4113, 3030, 5203, 5307). Set e.g.
+      #   model: backend/detection/ocr/models/verification/font_reader_without_4113.npz
+      # and put the 4113 bottle under the camera. Measured: without_4113 read
+      # 4113 08:26 correctly on 30 of 31 frames, without_3030 read 3030 22:42
+      # on 20 of 20. Switch back to '' afterwards.
+      # B, : and / must really look like B, : and / (mean log-probability).
+      # Rejects garbled cuts / wrong orientation; -2.0..-1.0 all gave the
+      # same result on the real frames.
+      min_literal_score: -1.0
+      # Every digit at least this confident. 0.0 = most correct reads
+      # (73/6/4 on unseen bottles); 0.5 = fewer wrong reads (58/1/24).
+      # Wrong reads still end as NOK at the PLC, which compares with the
+      # expected code.
+      min_digit_confidence: 0.0
     # One entry per printed line. # = digit, A = letter, * = any character,
     # space = gap between fields, anything else must be printed literally.
     # This is product-specific: change it when the printer format changes.
@@ -119,11 +145,44 @@ ocr:
     # a stray "."). Text is never cut out of the middle of a token.
     max_ignored_tokens: 3
     consensus:
-      # Preprocessing variants read in this order, stopping as soon as
-      # min_agree validated reads agree (or agreement became impossible).
-      # dot_divide / dot_subtract / dot (as configured) / classic / classic_derib
-      variants: [dot_divide, dot_subtract, classic]
-      min_agree: 2
+      # Accuracy first (2026-10): every bottle is read with 9 variants of the
+      # dot-text method - same cleanup, slightly different input (2x / 3x
+      # scale, crop tilted +/-3 deg, dots bridged) - so their mistakes are
+      # independent and outvoted. OK only when >= min_agree reads give the
+      # identical code AND no other code ties it.
+      #
+      # Bench (reference frame + real rib profile composited through every
+      # part of the print, 103 frames, PP-OCRv4 stand-in recognizer):
+      #   previous default (exact 2-of-3, old validator)  86 correct, 0 wrong, 17 rejected
+      #   this (exact 3-of-9, read all)                    96 correct, 0 wrong,  7 rejected
+      #   min_agree 2..4 all give 96 - not a knife-edge setting.
+      #
+      # Also available, NOT recommended on rib-crossed print:
+      #   classic, classic_derib       - OCR-mode CLAHE preprocessing on the crop
+      #   region, full_frame           - PaddleOCR's own detector on a wide box / the whole frame
+      #   ocr_pipeline                 - exactly what the OCR mode reads (static roi box)
+      #   region_dot                   - wide box with dot-text cleanup
+      # On the bench these read the 6 printed over the rib as "08:25" -
+      # confidently and consistently (classic: 67 of 103 frames), so adding
+      # them to the vote let wrong codes through (60 correct, 8 WRONG).
+      # QC_tools/compare_ocr_preprocessing.py reports every variant's own
+      # accuracy on your real frames - check there before adding any.
+      variants: [dot_divide, dot_subtract, dot_divide_x3, dot_subtract_x3,
+                 dot_divide_tilt_p3, dot_divide_tilt_m3, dot_subtract_tilt_p3,
+                 dot_subtract_tilt_m3, dot_divide_bridge]
+      fusion: exact          # exact = whole-code agreement; position_vote = per-character vote
+      min_agree: 3
+      # false = read all variants before deciding (the measured rule above,
+      # ~9 OCR calls per bottle). true = stop at the first min_agree agreeing
+      # reads: about 3x faster on clean bottles, but can't see a tie.
+      early_stop: false
+      # position_vote only: reads that must fit the template, and the weighted
+      # share each character's winner needs (0.6: 97/0/6, 0.7: 95/0/8, 0.8: 89/0/14).
+      min_reads: 3
+      min_position_share: 0.7
+      # region / region_dot only: margin around the located text, as a
+      # fraction of the text block size.
+      region_margin_frac: 0.6
 
   # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration.
   #
@@ -523,7 +582,9 @@ trigger:
   trigger_byte: "0x01"  # Byte the PLC sends to trigger a vision cycle
   response_ok: "OK\n"   # Response sent back on OK result ("ocr" / "object_detection" modes)
   response_nok: "NOK\n" # Response sent back on NOK result, and on any camera/vision failure
-  timeout_s: 5.0        # Max seconds to wait for vision result before responding NOK
+  timeout_s: 15.0       # Max seconds to wait for vision result before responding NOK.
+                        # 15s because OCRead reads every bottle 9x (~3s with PaddleOCR on CPU,
+                        # more with orientation retries). The PLC's receive timeout must allow it.
   max_text_length: 64   # "ocread" only: longer reads are sent as NOK (failure_reason text_too_long); keep <= the PLC receive buffer
   # In "ocread" mode no OK/NOK judgement is made here at all: the raw text
   # read from the product is sent back instead (newline-terminated), and the

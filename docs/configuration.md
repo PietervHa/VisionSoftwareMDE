@@ -22,13 +22,15 @@ All settings are managed through `config/default.yaml`. Restart the application 
 | `ocr.read_validation.template` | `["#### ##:##", "BB ##/##"]` | One entry per printed line: `#` digit, `A` letter, `*` any, space = field gap, other characters literal. Product-specific |
 | `ocr.read_validation.value_pattern` | hours/minutes/month regex | Regex the canonical code must fully match; `''` disables |
 | `ocr.read_validation.min_confidence` | `0.80` | Minimum recognizer confidence for every token used. Calibrate with the QC tool |
-| `ocr.read_validation.consensus.variants` / `min_agree` | `[dot_divide, dot_subtract, classic]` / `2` | Preprocessing variants read in order until `min_agree` validated reads agree. `min_agree: 1` = single read (faster, less protection against confident misreads) |
+| `ocr.read_validation.consensus.variants` | 9 dot-text variants | Preprocessing variants each bottle is read with. OCR-pipeline-style variants (`classic`, `region`, `full_frame`, `ocr_pipeline`) exist but misread print on ribs - check per-variant accuracy with the QC tool first |
+| `ocr.read_validation.consensus.fusion` / `min_agree` / `early_stop` | `exact` / `3` / `false` | OK when ≥ `min_agree` reads give the identical code and no other code ties it. `early_stop: true` stops at the first agreeing reads (faster) |
+| `ocr.read_validation.consensus.min_position_share` | `0.7` | `position_vote` fusion: weighted share each character's winner needs |
 | `ocr.allowed_chars` | letters, digits, `" :/.-"` | PaddleOCR only: tokens without any of these are dropped; other disallowed characters become `?`. `""` disables the filter |
 | `camera.index` | `0` | USB camera index; run `tests/camera_test.py` to find yours |
 | `camera.flip` | `-1` | `0` = none, `1` = horizontal, `-1` = vertical |
 | `trigger.enabled` | `false` | Set to `true` to activate TCP trigger for PLC |
 | `trigger.port` | `5001` | Port the PLC connects to |
-| `trigger.timeout_s` | `5.0` | Seconds to wait for result before responding NOK |
+| `trigger.timeout_s` | `15.0` | Seconds to wait for result before responding NOK |
 | `trigger.max_text_length` | `64` | OCRead only: reads longer than this (bytes) are sent as NOK with `failure_reason: text_too_long` |
 | `hmi.enable_video_feed` | `true` | Disable to reduce CPU/bandwidth |
 | `web.port` | `5000` | Port for the web dashboard |

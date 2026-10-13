@@ -5,6 +5,9 @@ recognise -> orientation retry -> output filter -> read validation).
 
 Pipelines:
   previous             derib + CLAHE, no validation (configuration before 2026-10)
+  all_variants         validation + position vote over EVERY preprocessing variant,
+                       including the OCR-pipeline-style reads (region, full_frame,
+                       ocr_pipeline) - used to report each variant's own accuracy
   dot_text_raw         dot_text, no validation (any text = OK)
   validated_single     read validation, one read (first consensus variant)
   validated_consensus  read validation + consensus, as configured in default.yaml
@@ -52,28 +55,70 @@ def _find_frames(root: Path, pattern: str | None) -> list[Path]:
     return sorted([*root.glob("**/*.png"), *root.glob("**/*.jpg"), *root.glob("**/*.jpeg")])
 
 
+def _resolve_frames_root(given):
+    """The folder to read, with a clear message instead of "no frames" when
+    it doesn't exist. Default: the configured debug_dir (project-root
+    relative). Also checks backend/<path>, where captures ended up when the
+    app was started from backend/ before debug_dir was anchored to the root."""
+    from backend.core.config_loader import cfg
+    from backend.detection.ocr.paddle_ocr import PROJECT_ROOT, resolve_project_path
+
+    configured = (cfg.get("ocr", {}).get("dynamic_roi", {}) or {}).get("debug_dir") or "data/debug/dynamic_roi"
+    rel = Path(given) if given is not None else Path(configured)
+    candidates = [rel] if rel.is_absolute() else [Path.cwd() / rel, Path(resolve_project_path(rel)),
+                                                  PROJECT_ROOT / "backend" / rel]
+    for c in candidates:
+        if c.exists():
+            return c
+    print(f"Folder not found: {rel}")
+    print("Looked in:\n  " + "\n  ".join(str(c) for c in candidates))
+    return None
+
+
+def _in_window(path, since, until):
+    """Debug cycle folders are named YYYYMMDD_HHMMSS_mmm; filter on that time."""
+    import re
+    for part in Path(path).parts[::-1]:
+        m = re.match(r"\d{8}_(\d{2})(\d{2})(\d{2})", part)
+        if m:
+            t = ":".join(m.groups())
+            norm = lambda s: (s + ":00")[:8] if s and len(s) == 5 else s
+            return (not since or t >= norm(since)) and (not until or t <= norm(until) if len(until or "") > 5
+                                                         else not until or t[:5] <= until)
+    return False
+
+
 def _pipelines(engine, bridge_values):
     dot_cfg = dict(engine.dot_text_cfg or {})
     validator = engine.validator
     variants = list(engine.consensus_variants)
     need = engine.consensus_min_agree
+    # Every pipeline sets ALL of these, so no setting leaks from one pipeline
+    # into the next (they share one engine).
+    fusion = dict(consensus_fusion=engine.consensus_fusion, consensus_early_stop=engine.consensus_early_stop)
+    single = dict(consensus_fusion="exact", consensus_early_stop=True)
     p = [
         ("previous", dict(validator=None, consensus_variants=[None], consensus_min_agree=1,
-                          dot_text_enabled=False, derib_enabled=True, dot_text_cfg=dot_cfg)),
+                          dot_text_enabled=False, derib_enabled=True, dot_text_cfg=dot_cfg, **single)),
         ("dot_text_raw", dict(validator=None, consensus_variants=[None], consensus_min_agree=1,
-                              dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg)),
+                              dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg, **single)),
     ]
     if validator is not None:
         p += [
             ("validated_single", dict(validator=validator, consensus_variants=variants[:1], consensus_min_agree=1,
-                                      dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg)),
+                                      dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg, **single)),
             ("validated_consensus", dict(validator=validator, consensus_variants=variants, consensus_min_agree=need,
-                                         dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg)),
+                                         dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg, **fusion)),
         ]
+        all_variants = sorted(engine.PREPROCESS_VARIANTS - {"dot", "classic_derib"})
+        p.append(("all_variants", dict(validator=validator, consensus_variants=all_variants,
+                                       consensus_min_agree=need, consensus_fusion="position_vote",
+                                       consensus_early_stop=False,
+                                       dot_text_enabled=True, derib_enabled=False, dot_text_cfg=dot_cfg)))
         for b in bridge_values:
             p.append((f"bridge={b:g}", dict(validator=validator, consensus_variants=variants, consensus_min_agree=need,
                                             dot_text_enabled=True, derib_enabled=False,
-                                            dot_text_cfg=dict(dot_cfg, bridge_sigma_px=b))))
+                                            dot_text_cfg=dict(dot_cfg, bridge_sigma_px=b), **fusion)))
     else:
         print("Note: ocr.read_validation is disabled in the config - validated pipelines skipped.")
     return p
@@ -81,21 +126,33 @@ def _pipelines(engine, bridge_values):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("frames", type=Path, help="folder (searched recursively) or a single image")
+    parser.add_argument("frames", type=Path, nargs="?", default=None,
+                        help="folder (searched recursively) or a single image; "
+                             "default: the configured ocr.dynamic_roi.debug_dir")
     parser.add_argument("--expected", default=None, help='expected code, e.g. "4113 08:26 BB 05/26"')
     parser.add_argument("--glob", default=None, help="glob pattern inside the folder (default: debug_save frames)")
     parser.add_argument("--bridge", default="", help="comma-separated bridge_sigma_px values to add")
     parser.add_argument("--csv", type=Path, default=None, help="write one row per frame and pipeline")
     parser.add_argument("--limit", type=int, default=0, help="only use the first N frames")
+    parser.add_argument("--since", help="only cycles captured from HH:MM[:SS] (from the debug folder name)")
+    parser.add_argument("--until", help="only cycles captured up to HH:MM[:SS]")
     parser.add_argument("--config", default=None, help="config YAML (read by backend.core.config_loader)")
     args = parser.parse_args(argv)
 
-    frames = _find_frames(args.frames, args.glob)
+    root = _resolve_frames_root(args.frames)
+    if root is None:
+        return 1
+    frames = _find_frames(root, args.glob)
+    if args.since or args.until:
+        frames = [f for f in frames if _in_window(f, args.since, args.until)]
     if args.limit:
         frames = frames[: args.limit]
     if not frames:
-        print(f"No frames found under {args.frames}")
+        print(f"No frames found under {root}")
+        print("Expected per-cycle folders containing text_locator_search.png (written while "
+              "ocr.dynamic_roi.debug_save is true), or use --glob for other image names.")
         return 1
+    print(f"Reading frames from {root}")
 
     from backend.detection.ocr.paddle_ocr import PaddleOCR
 
@@ -111,6 +168,7 @@ def main(argv=None) -> int:
     reads = {name: collections.Counter() for name, _ in pipelines}
     ok_conf = {name: [] for name, _ in pipelines}
     ms = {name: [] for name, _ in pipelines}
+    per_variant = collections.defaultdict(collections.Counter)  # from the all_variants pipeline
     rows = []
     for i, path in enumerate(frames, 1):
         frame = cv2.imread(str(path))
@@ -131,6 +189,12 @@ def main(argv=None) -> int:
                 ok = bool(_norm(r.get("text")))
                 reason = None if ok else "no_text_detected"
             text = r.get("text", "")
+            if name == "all_variants" and validation:
+                for v in validation["reads"]:
+                    c = per_variant[v["variant"]]
+                    c["n"] += 1
+                    if v.get("accepted"):
+                        c["ok" if expected is None or _norm(v.get("text")) == expected else "WRONG"] += 1
             reads[name][(("OK  " if ok else "NOK ") + text)] += 1
             if ok:
                 hit = expected is None or _norm(text) == expected
@@ -165,6 +229,14 @@ def main(argv=None) -> int:
                   f"5th percentile {np.percentile(ok_conf[name], 5):.3f}")
         for text, count in reads[name].most_common(4):
             print(f"      {count:4d}x  {text!r}")
+
+    if per_variant:
+        print("\nEach preprocessing variant on its own (validated single read):")
+        print("  variant                accepted" + ("   of which WRONG" if expected else ""))
+        for v, c in sorted(per_variant.items(), key=lambda kv: (-kv[1]["ok"], kv[1]["WRONG"])):
+            print(f"  {v:22s} {c['ok'] + c['WRONG']:5d}/{c['n']}" + (f"   {c['WRONG']:5d}" if expected else ""))
+        print("  Variants with WRONG > 0 are confidently misreading this print - keep them out of")
+        print("  ocr.read_validation.consensus.variants.")
 
     if args.csv:
         with args.csv.open("w", newline="", encoding="utf-8") as fh:

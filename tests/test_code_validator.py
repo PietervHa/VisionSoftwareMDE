@@ -88,6 +88,23 @@ class TemplateTests(unittest.TestCase):
         self.assertEqual(r["text"], "4113 08:26 BB 05/26")
         self.assertEqual(r["orientation"], "reversed")
 
+    def test_scrambled_token_order_still_fields(self):
+        for order in (("BB", "4113", "05/26", "08:26"), ("4113", "05/26", "08:26", "BB")):
+            r = T().validate(toks(*order))
+            self.assertTrue(r["accepted"], order)
+            self.assertEqual(r["text"], "4113 08:26 BB 05/26")
+
+    def test_punctuation_speck_on_a_token_edge_is_stripped(self):
+        self.assertEqual(T().validate(toks("411308:26", "BB", "05/26."))["text"], "4113 08:26 BB 05/26")
+        # ...but a glued digit is information and is never stripped
+        self.assertEqual(T().validate(toks("411308:26", "BB", "05/264"))["reason"], "format_mismatch")
+
+    def test_ambiguous_assignment_is_rejected(self):
+        # Two tokens that both fit the BB date field with different values.
+        r = T().validate(toks("4113 08:26", "BB", "05/26", "07/26"))
+        self.assertFalse(r["accepted"])
+        self.assertTrue(r.get("ambiguous"))
+
     def test_low_confidence_is_rejected(self):
         r = T().validate([{"text": "4113 08:26", "confidence": 0.99}, {"text": "BB 05/26", "confidence": 0.5}])
         self.assertEqual(r["reason"], "low_confidence")
@@ -126,6 +143,10 @@ class ConsensusTests(unittest.TestCase):
         engine.validator = T()
         engine.consensus_variants = list(variants)
         engine.consensus_min_agree = min_agree
+        # These tests cover the exact/early-stop mode; tests of read-all set it explicitly.
+        engine.consensus_fusion = "exact"
+        engine.consensus_early_stop = True
+        engine.font_reader = None   # these tests cover the PaddleOCR consensus path
         return engine
 
     def _frame(self):
@@ -164,6 +185,24 @@ class ConsensusTests(unittest.TestCase):
         r = e.read(self._frame())
         self.assertIn("worker died", r["error"])
 
+    def test_full_read_requires_the_winner_to_beat_every_other_code(self):
+        good, bad = ["4113 08:26", "BB 05/26"], ["4113 08:25", "BB 05/26"]
+        e = self._engine(good, good, bad, bad, variants=("dot_divide", "dot_subtract", "dot_divide_x3", "dot_subtract_x3"),
+                         min_agree=2)
+        e.consensus_early_stop = False
+        r = e.read(self._frame())
+        self.assertEqual(e._paddle.calls, 4, "every variant must be read")
+        self.assertFalse(r["validation"]["accepted"], "2 vs 2 is a tie, not a pass")
+        self.assertEqual(r["failure_reason"], "no_consensus")
+
+    def test_full_read_accepts_a_clear_winner(self):
+        good, bad = ["4113 08:26", "BB 05/26"], ["4113 08:25", "BB 05/26"]
+        e = self._engine(good, bad, good, good, variants=("dot_divide", "dot_subtract", "dot_divide_x3", "dot_subtract_x3"),
+                         min_agree=3)
+        e.consensus_early_stop = False
+        r = e.read(self._frame())
+        self.assertEqual((r["validation"]["accepted"], r["text"]), (True, "4113 08:26 BB 05/26"))
+
     def test_single_read_mode(self):
         e = self._engine(["4113 08:26", "BB 05/26"], variants=("dot_divide",), min_agree=1)
         self.assertEqual(e.read(self._frame())["text"], "4113 08:26 BB 05/26")
@@ -176,6 +215,86 @@ class ConsensusTests(unittest.TestCase):
                  {"text": "05/26", "box": box(70, 50)}, {"text": "4113", "box": box(12, 10)}]
         ordered = [c["text"] for c in PaddleOCR._order_candidates(cands)]
         self.assertEqual(ordered, ["4113", "08:26", "BB", "05/26"])
+
+
+class FusionTests(unittest.TestCase):
+    def _r(self, text, conf=0.95, reason=None):
+        return {"text": text, "min_token_confidence": conf, "reason": reason, "accepted": reason is None}
+
+    def test_misread_digit_is_outvoted_per_position(self):
+        reads = [self._r("4113 08:25 BB 05/26"), self._r("4113 08:26 BB 05/26"),
+                 self._r("4113 08:26 BB 05/26"), self._r("4113 08:26 BB 05/26")]
+        f = T().fuse(reads, min_reads=3, min_share=0.7)
+        self.assertTrue(f["accepted"])
+        self.assertEqual(f["text"], "4113 08:26 BB 05/26")
+        self.assertAlmostEqual(f["min_share"], 0.75, places=2)
+
+    def test_errors_at_different_positions_still_fuse_to_the_right_code(self):
+        # No single read is fully right, but every position has a clear majority.
+        reads = [self._r("4118 08:26 BB 05/26"), self._r("4113 08:25 BB 05/26"),
+                 self._r("4113 08:26 BB 06/26"), self._r("4113 08:26 BB 05/26"),
+                 self._r("4113 08:26 BB 05/26")]
+        f = T().fuse(reads, min_reads=3, min_share=0.7)
+        self.assertEqual((f["accepted"], f["text"]), (True, "4113 08:26 BB 05/26"))
+
+    def test_genuine_disagreement_rejects(self):
+        reads = [self._r("4113 08:25 BB 05/26"), self._r("4113 08:26 BB 05/26"), self._r("4113 08:28 BB 05/26")]
+        f = T().fuse(reads, min_reads=3, min_share=0.7)
+        self.assertFalse(f["accepted"])
+        self.assertEqual(f["reason"], "no_consensus")
+
+    def test_only_correctly_fielded_reads_vote(self):
+        reads = [self._r("4113 08:26 BB 05/26"), self._r("4113 08:26 BB 05/26", conf=0.5, reason="low_confidence"),
+                 {"text": None, "reason": "format_mismatch", "accepted": False, "min_token_confidence": None}]
+        f = T().fuse(reads, min_reads=2, min_share=0.7)
+        self.assertEqual((f["accepted"], f["n_reads"]), (True, 2))
+        self.assertFalse(T().fuse(reads, min_reads=3, min_share=0.7)["accepted"])
+
+    def test_confidence_weights_the_vote(self):
+        reads = [self._r("4113 08:25 BB 05/26", conf=0.30), self._r("4113 08:26 BB 05/26", conf=0.99)]
+        f = T().fuse(reads, min_reads=2, min_share=0.7)
+        self.assertEqual((f["accepted"], f["text"]), (True, "4113 08:26 BB 05/26"))
+
+    def test_fused_value_is_still_checked(self):
+        reads = [self._r("4113 27:26 BB 05/26", reason="invalid_value")] * 3
+        self.assertEqual(T().fuse(reads, min_reads=3, min_share=0.7)["reason"], "invalid_value")
+
+
+class PositionVoteReadTests(ConsensusTests):
+    VARIANTS = ("dot_divide", "dot_subtract", "classic", "region", "region_dot", "full_frame", "ocr_pipeline")
+
+    def _vote_engine(self, *script, min_reads=3, min_share=0.7):
+        e = self._engine(*script, variants=self.VARIANTS, min_agree=2)
+        e.consensus_fusion, e.consensus_min_reads, e.consensus_min_share = "position_vote", min_reads, min_share
+        return e
+
+    def test_reads_every_variant_and_fuses(self):
+        good, bad = ["4113 08:26", "BB 05/26"], ["4113 08:25", "BB 05/26"]
+        e = self._vote_engine(bad, good, ["4113 08:2", "BB 05/26"], good, good, good, good)
+        r = e.read(self._frame())
+        self.assertEqual(e._paddle.calls, len(self.VARIANTS))
+        self.assertTrue(r["validation"]["accepted"])
+        self.assertEqual(r["text"], "4113 08:26 BB 05/26")
+        self.assertEqual(r["validation"]["fusion"]["n_reads"], 6)
+        self.assertAlmostEqual(r["validation"]["fusion"]["min_share"], 5 / 6, places=2)
+
+    def test_rejects_when_too_few_reads_fit(self):
+        junk = ["4113 08:2", "BB 05/26"]
+        e = self._vote_engine(["4113 08:26", "BB 05/26"], junk, junk, junk, junk, junk, ["4113 08:26", "BB 05/26"])
+        r = e.read(self._frame())
+        self.assertFalse(r["validation"]["accepted"])
+        self.assertEqual(r["failure_reason"], "no_consensus")
+
+    def test_frame_region_inputs(self):
+        e = self._vote_engine(["x"])
+        frame = np.zeros((480, 744, 3), np.uint8)
+        located = {"bbox": [300, 250, 460, 330]}
+        region = e._frame_variant_input(frame, located, "region")
+        self.assertGreater(region.shape[1], 160 + 2 * 40)       # box widened on both sides
+        self.assertEqual(e._frame_variant_input(frame, None, "region").shape[:2], e._downscale_roi(frame).shape[:2])
+        before = frame.copy()
+        e._frame_variant_input(frame, located, "ocr_pipeline")
+        self.assertTrue(np.array_equal(frame, before), "OCR-pipeline read must not draw on the shared frame")
 
 
 class VisionStatusTests(unittest.TestCase):

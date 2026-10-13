@@ -13,17 +13,32 @@ import os
 import string
 import unicodedata
 from collections import Counter
+from pathlib import Path
 from backend.detection.ocr.paddle_worker import PaddleOCRWorker, PaddleWorkerError
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
 from backend.detection.ocr.text_locator import locate_text_region, deskew_crop
 from backend.detection.ocr.dot_text import clean_dot_text
-from backend.detection.ocr.code_validator import CodeTemplate, REJECT_CONSENSUS
+from backend.detection.ocr.code_validator import CodeTemplate, REJECT_CONSENSUS, REJECT_FORMAT, REJECT_CONFIDENCE
+from backend.detection.ocr.font_reader import FontReader
 
 log = get_logger(__name__)
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def resolve_project_path(path) -> str:
+    """Relative paths in the config are relative to the project root - the
+    same as data/results and data/logs - NOT to whatever folder the app was
+    started from. (debug_dir used to be taken relative to the working
+    directory, so starting the app from backend/ silently wrote the debug
+    captures to backend/data/debug/dynamic_roi.)"""
+    p = Path(str(path))
+    return str(p if p.is_absolute() else PROJECT_ROOT / p)
+
 
 # Characters OCR output is allowed to contain unless ocr.allowed_chars
 # overrides it - see _sanitize_candidates().
@@ -63,7 +78,12 @@ class PaddleOCR:
         dynamic_roi_cfg = ocr_cfg.get("dynamic_roi", {}) if isinstance(ocr_cfg.get("dynamic_roi"), dict) else {}
         self.dynamic_roi_enabled = bool(dynamic_roi_cfg.get("enabled", False))
         self.dynamic_roi_cfg = dynamic_roi_cfg
-        self.dynamic_roi_debug_dir = dynamic_roi_cfg.get("debug_dir") if dynamic_roi_cfg.get("debug_save") else None
+        self.dynamic_roi_debug_dir = (
+            resolve_project_path(dynamic_roi_cfg.get("debug_dir") or "data/debug/dynamic_roi")
+            if dynamic_roi_cfg.get("debug_save") else None
+        )
+        if self.dynamic_roi_debug_dir:
+            log.info("OCRead debug captures are written to %s", self.dynamic_roi_debug_dir)
 
         # Rib inpainting (OCRead / dynamic ROI only): on this cap, the
         # mold rib crosses directly through the same 1-2 leading
@@ -109,6 +129,14 @@ class PaddleOCR:
         self.validator = None
         self.consensus_variants = [None]
         self.consensus_min_agree = 1
+        self.consensus_fusion = "exact"
+        self.consensus_early_stop = True
+        self.consensus_min_reads = 2
+        self.consensus_min_share = 0.7
+        self.region_margin_frac = 0.6
+        self.reader = "paddle"
+        self.font_reader = None
+        self._last_located = None
         if val_cfg.get("enabled", False):
             self.validator = CodeTemplate.from_config(val_cfg)
             cons = val_cfg.get("consensus") if isinstance(val_cfg.get("consensus"), dict) else {}
@@ -119,6 +147,43 @@ class PaddleOCR:
                                  f"choose from {sorted(self.PREPROCESS_VARIANTS)}")
             self.consensus_variants = variants
             self.consensus_min_agree = max(1, min(int(cons.get("min_agree", 1)), len(variants)))
+            # "exact": OK when min_agree reads give the identical code (stops early).
+            # "position_vote": every read that fits the template votes per
+            # character position (weighted by its confidence); OK only when
+            # >= min_reads reads fit and every position's winner holds
+            # >= min_position_share of the weight. Reads all variants.
+            self.consensus_fusion = str(cons.get("fusion", "exact"))
+            if self.consensus_fusion not in ("exact", "position_vote"):
+                raise ValueError("ocr.read_validation.consensus.fusion must be 'exact' or 'position_vote'")
+            # early_stop (exact fusion only): stop as soon as min_agree reads
+            # agree (fast). false = read every variant and also require the
+            # winning code to beat every other code (no ties) - slower, but
+            # it is the rule the accuracy numbers in default.yaml were measured with.
+            self.consensus_early_stop = bool(cons.get("early_stop", True))
+            self.consensus_min_reads = int(cons.get("min_reads", 2))
+            self.consensus_min_share = float(cons.get("min_position_share", 0.7))
+            self.region_margin_frac = float(cons.get("region_margin_frac", 0.6))
+
+            # Reader: "font" = classifier trained on this printer's dot font
+            # (font_reader.py); "paddle" = PaddleOCR consensus as above.
+            self.reader = str(val_cfg.get("reader", "font")).lower()
+            fr_cfg = val_cfg.get("font_reader") if isinstance(val_cfg.get("font_reader"), dict) else {}
+            if self.reader == "font":
+                try:
+                    model = fr_cfg.get("model") or None
+                    self.font_reader = FontReader(
+                        resolve_project_path(model) if model else None,
+                        min_literal_score=float(fr_cfg.get("min_literal_score", -1.0)),
+                        min_digit_confidence=float(fr_cfg.get("min_digit_confidence", 0.0)),
+                    )
+                    if not self.font_reader.supports(self.validator.lines) or len(self.validator.lines) != 2:
+                        log.warning("Font reader does not support template %s - using PaddleOCR reader.",
+                                    self.validator.lines)
+                        self.font_reader = None
+                except Exception as exc:
+                    log.error("Font reader could not be loaded (%s) - using PaddleOCR reader.", exc)
+                    self.font_reader = None
+            log.info("OCRead reader: %s", "font" if self.font_reader is not None else "paddle")
             log.info("OCRead validation: template=%s variants=%s min_agree=%d min_confidence=%.2f",
                      self.validator.lines, variants, self.consensus_min_agree, self.validator.min_confidence)
 
@@ -369,9 +434,12 @@ class PaddleOCR:
                     "OCRead called with dynamic ROI disabled (ocr.dynamic_roi.enabled=false) - "
                     "running OCR on the full frame. Enable it in config to locate text automatically."
                 )
+                self._last_located = None
                 return frame, None
 
             located = locate_text_region(frame, self.dynamic_roi_cfg, debug_dir=self.dynamic_roi_debug_dir)
+            # Kept for OCRead's frame-region reads (read() -> _frame_variant_input).
+            self._last_located = located or None
             if not located:
                 log.debug("Dynamic ROI: no text region found on this frame - running OCR on the full frame.")
                 return frame, None
@@ -435,7 +503,7 @@ class PaddleOCR:
             report = "\n".join(header_lines + body_lines) + "\n"
 
             os.makedirs(debug_dir, exist_ok=True)
-            with open(os.path.join(debug_dir, "ocr_result.txt"), "w", encoding="utf-8") as f:
+            with open(os.path.join(debug_dir, os.path.splitext(name)[0] + ".txt"), "w", encoding="utf-8") as f:
                 f.write(report)
 
             # Captioned image too, for a quick visual glance without having
@@ -455,13 +523,31 @@ class PaddleOCR:
             log.warning("OCR result debug write failed (non-fatal): %s", exc)
 
     # Preprocessing variants usable for consensus reads (read_validation).
-    PREPROCESS_VARIANTS = {
+    # On the deskewed tight crop from the text locator:
+    CROP_VARIANTS = {
         "dot",           # dot_text with its configured illumination model
         "dot_divide",    # dot_text, flat-field (divide)
         "dot_subtract",  # dot_text, subtractive
         "classic",       # grayscale + upscale + CLAHE (previous default, no derib)
         "classic_derib", # previous default with rib inpainting
+        # Test-time variants of dot_divide/dot_subtract: same method, slightly
+        # different input, so their errors are less correlated and a vote
+        # between them means something.
+        "dot_divide_x3", "dot_subtract_x3",          # 3x instead of 2x upscale
+        "dot_divide_tilt_p3", "dot_divide_tilt_m3",  # crop rotated +/-3 degrees
+        "dot_subtract_tilt_p3", "dot_subtract_tilt_m3",
+        "dot_divide_bridge",                         # dots merged into strokes (sigma 0.7)
     }
+    # On a larger part of the frame, letting PaddleOCR's own detector find
+    # and straighten the lines - the way the plain OCR pipeline reads, which
+    # detects dot text well but only inside its fixed box:
+    FRAME_VARIANTS = {
+        "region",        # generous box around the located text, OCR-pipeline preprocessing
+        "region_dot",    # same box, dot_text (flat-field) preprocessing
+        "full_frame",    # whole frame, OCR-pipeline preprocessing
+        "ocr_pipeline",  # exactly what the OCR pipeline reads: static cfg["roi"] box + its preprocessing
+    }
+    PREPROCESS_VARIANTS = CROP_VARIANTS | FRAME_VARIANTS
 
     @staticmethod
     def _order_candidates(candidates):
@@ -554,8 +640,10 @@ class PaddleOCR:
         several preprocessing variants are read. Returns
         (raw_crop, cycle_debug_dir, profile_data)."""
         profile_data = {}
+        self._last_located = None
         t0 = time.perf_counter()
         roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
+        located = self._last_located if dynamic_roi else None
         profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
 
         t1 = time.perf_counter()
@@ -571,7 +659,23 @@ class PaddleOCR:
                 cv2.imwrite(os.path.join(cycle_debug_dir, "crop_raw_preprocess.png"), roi_frame)
             except Exception as exc:  # pragma: no cover - debug aid only
                 log.warning("Raw crop debug write failed (non-fatal): %s", exc)
-        return roi_frame, cycle_debug_dir, profile_data
+        return roi_frame, cycle_debug_dir, profile_data, located
+
+    def _frame_variant_input(self, frame, located, variant):
+        """Raw input for a FRAME_VARIANTS read (see there)."""
+        if variant == "ocr_pipeline":
+            # Reuse the OCR pipeline's own static-ROI crop, unmodified. A copy,
+            # because that path may draw its debug ROI box onto the frame.
+            crop, _ = self._apply_roi(frame.copy(), dynamic=False)
+            return self._downscale_roi(crop)
+        if variant == "full_frame" or not located:
+            return self._downscale_roi(frame)
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = (int(v) for v in located["bbox"])
+        margin = int(max(40, self.region_margin_frac * max(x2 - x1, y2 - y1)))
+        x1, y1 = max(0, x1 - margin), max(0, y1 - margin)
+        x2, y2 = min(w, x2 + margin), min(h, y2 + margin)
+        return self._downscale_roi(frame[y1:y2, x1:x2])
 
     def _preprocess_variant(self, crop, variant, dynamic_roi, profile_data):
         if variant is None:
@@ -581,12 +685,25 @@ class PaddleOCR:
                 variant = "classic_derib"
             else:
                 variant = "classic"
+        if variant in ("region", "full_frame", "ocr_pipeline"):
+            return self._preprocess_image(crop)  # OCR-pipeline preprocessing, unchanged
+        if variant == "region_dot":
+            return clean_dot_text(crop, dict(self.dot_text_cfg or {}, illumination="divide"))
         if variant.startswith("dot"):
             cfg = dict(self.dot_text_cfg or {})
-            if variant == "dot_divide":
+            if variant.startswith("dot_divide"):
                 cfg["illumination"] = "divide"
-            elif variant == "dot_subtract":
+            elif variant.startswith("dot_subtract"):
                 cfg["illumination"] = "subtract"
+            if variant.endswith("_x3") and max(crop.shape[:2]) <= 400:
+                cfg["upscale"] = 3  # only on a real text crop, not on a full-frame fallback
+            if variant.endswith("_bridge"):
+                cfg["bridge_sigma_px"] = 0.7
+            if "_tilt_" in variant:
+                angle = 3.0 if variant.endswith("_p3") else -3.0
+                h, w = crop.shape[:2]
+                rot = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), angle, 1.0)
+                crop = cv2.warpAffine(crop, rot, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
             return clean_dot_text(crop, cfg)
         if variant == "classic_derib":
             t_derib = time.perf_counter()
@@ -630,10 +747,12 @@ class PaddleOCR:
         # are returned in the result (benchmarks/ocr_benchmark.py).
         if prepared is None:
             prepared = self._prepare(frame, dynamic_roi)
-        raw_crop, cycle_debug_dir, prep_profile = prepared
+        raw_crop, cycle_debug_dir, prep_profile, located = prepared
         profile_data = dict(prep_profile)
 
         t1b = time.perf_counter()
+        if variant in self.FRAME_VARIANTS:
+            raw_crop = self._frame_variant_input(frame, located, variant)
         roi_frame = self._preprocess_variant(raw_crop, variant, dynamic_roi, profile_data)
         profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
 
@@ -806,6 +925,62 @@ class PaddleOCR:
 
         return result
 
+    def _read_with_font_reader(self, frame, profile=False):
+        """OCRead with the trained dot-font reader (see font_reader.py)."""
+        t0 = time.perf_counter()
+        crop, cycle_debug_dir, profile_data, located = self._prepare(frame, dynamic_roi=True)
+        r = self.font_reader.read(crop, self.validator.lines)
+        elapsed = (time.perf_counter() - t0) * 1000.0
+        if r is None:
+            reason, candidates, verdict = REJECT_FORMAT, [], None
+        else:
+            candidates = [{"text": line, "confidence": r["confidence"]} for line in r["lines"]]
+            # The font reader has its own gates (literal_score, digit confidence);
+            # the template check here adds the value_pattern sanity check.
+            verdict = self.validator.validate([{"text": line, "confidence": 1.0} for line in r["lines"]])
+            if r["literal_score"] < self.font_reader.min_literal_score:
+                reason = REJECT_FORMAT
+            elif r["confidence"] < self.font_reader.min_digit_confidence:
+                reason = REJECT_CONFIDENCE
+            else:
+                reason = verdict["reason"]
+        accepted = reason is None
+        if not accepted and located is None and reason == REJECT_FORMAT:
+            reason = "no_text_detected"   # no print found on the frame and nothing readable
+        # A rejected read must not show a code: the reader always fills every
+        # digit position with its best guess, so the decode of a rejected
+        # read is not a reading (it looked like guessing on the HMI). It is
+        # kept only in the debug file.
+        text = r["text"] if accepted else ""
+        if not accepted:
+            candidates = []
+        read_summary = {"variant": "font_reader", "accepted": accepted, "reason": reason,
+                        "text": r["text"] if accepted else None, "raw_text": text,
+                        "min_token_confidence": r["confidence"] if r else None,
+                        "literal_score": r["literal_score"] if r else None,
+                        "orientation": ("reversed" if r and r["flipped"] else "normal") if r else None}
+        if cycle_debug_dir:
+            try:
+                os.makedirs(cycle_debug_dir, exist_ok=True)
+                with open(os.path.join(cycle_debug_dir, "font_reader.txt"), "w", encoding="utf-8") as fh:
+                    fh.write(f"{read_summary}\n")
+                    if r is not None and not accepted:
+                        fh.write(f"rejected decode (not a reading): {r['text']!r}\n")
+            except Exception as exc:  # pragma: no cover - debug aid only
+                log.warning("Font reader debug write failed (non-fatal): %s", exc)
+        result = {
+            "detections": candidates,
+            "text": text,
+            "processing_time_ms": round(elapsed, 1),
+            "mode": "ocread",
+            "validation": {"accepted": accepted, "reason": reason, "reads": [read_summary], "fusion": None},
+        }
+        if not accepted:
+            result["failure_reason"] = reason
+        if profile:
+            result["_profile_ms"] = profile_data
+        return result
+
     def read(self, frame, profile=False):
         """
         OCRead: read the printed code from the frame.
@@ -841,6 +1016,9 @@ class PaddleOCR:
                 result["_profile_ms"] = profile_data
             return result
 
+        if self.font_reader is not None:
+            return self._read_with_font_reader(frame, profile)
+
         prepared = self._prepare(frame, dynamic_roi=True)
         variants = self.consensus_variants
         need = self.consensus_min_agree
@@ -858,6 +1036,8 @@ class PaddleOCR:
                 return result
             verdict = self.validator.validate(candidates)
             reads.append({"variant": variant, "candidates": candidates, **verdict})
+            if self.consensus_fusion == "position_vote" or not self.consensus_early_stop:
+                continue  # accuracy first: read every variant, decide below
             if verdict["accepted"]:
                 votes[verdict["text"]] += 1
                 if votes[verdict["text"]] >= need:
@@ -866,16 +1046,36 @@ class PaddleOCR:
             if max(votes.values(), default=0) + remaining < need:
                 break
 
-        winner, count = votes.most_common(1)[0] if votes else (None, 0)
-        accepted = winner is not None and count >= need
         primary = reads[0]
-        if accepted:
-            source = next(r for r in reads if r["accepted"] and r.get("text") == winner)
-            text, reason = winner, None
+        fusion_info = None
+        if self.consensus_fusion == "position_vote":
+            fused = self.validator.fuse(reads, min_reads=self.consensus_min_reads,
+                                        min_share=self.consensus_min_share)
+            fusion_info = {k: fused[k] for k in ("n_reads", "min_share", "position_shares") if k in fused}
+            accepted = fused["accepted"]
+            if accepted:
+                text, reason = fused["text"], None
+                source = max((r for r in reads if r.get("text") == fused["text"]),
+                             key=lambda r: r.get("min_token_confidence") or 0.0, default=primary)
+            else:
+                source = primary
+                reason = fused["reason"]
+                text = fused.get("text") or primary["raw_text"]
         else:
-            source = primary
-            text = primary["raw_text"]
-            reason = REJECT_CONSENSUS if votes else primary["reason"]
+            if not self.consensus_early_stop:
+                votes = Counter(r["text"] for r in reads if r["accepted"])
+            ranked = votes.most_common(2)
+            winner, count = ranked[0] if ranked else (None, 0)
+            # A tie between two different codes is a disagreement, not a pass.
+            tied = len(ranked) > 1 and ranked[1][1] == count
+            accepted = winner is not None and count >= need and not tied
+            if accepted:
+                source = next(r for r in reads if r["accepted"] and r.get("text") == winner)
+                text, reason = winner, None
+            else:
+                source = primary
+                text = primary["raw_text"]
+                reason = REJECT_CONSENSUS if votes else primary["reason"]
 
         summary = [
             {k: r.get(k) for k in ("variant", "accepted", "reason", "text", "raw_text", "corrections",
@@ -888,7 +1088,7 @@ class PaddleOCR:
             "text": text,
             "processing_time_ms": round(total_ms, 1),
             "mode": "ocread",
-            "validation": {"accepted": accepted, "reason": reason, "reads": summary},
+            "validation": {"accepted": accepted, "reason": reason, "reads": summary, "fusion": fusion_info},
         }
         if not accepted:
             result["failure_reason"] = reason
