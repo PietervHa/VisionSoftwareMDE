@@ -131,6 +131,9 @@ class OCReadRoutingTests(unittest.TestCase):
         engine.dot_text_enabled = dot_text_enabled
         engine.dot_text_cfg = {}
         engine.derib_enabled = derib_enabled
+        # These tests cover the raw-read path; validation has its own tests.
+        engine.validator = None
+        engine.consensus_variants = [None]
         return engine
 
     def _frame(self):

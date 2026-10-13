@@ -87,6 +87,10 @@ async function updateResult() {
                 ocreadTextEl.textContent = result.text || "-";
             } else if (result.failure_reason === "no_text_detected") {
                 ocreadTextEl.textContent = "(no text detected)";
+            } else if (["format_mismatch", "low_confidence", "invalid_value", "no_consensus", "text_too_long"].includes(result.failure_reason)) {
+                // Read was made but not accepted (read_validation): show why,
+                // plus what was read, so operators can see what it struggled with.
+                ocreadTextEl.textContent = `(not accepted: ${result.failure_reason}) ${result.text || ""}`.trim();
             } else if (result.failure_reason) {
                 // Technical failure (camera unavailable, OCR engine error,
                 // timeout, ...) - kept visually distinct from a genuine

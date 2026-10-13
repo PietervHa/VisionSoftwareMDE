@@ -50,10 +50,23 @@ def _parse_ocr_result(results) -> list:
             scores = page["rec_scores"]
         except (KeyError, TypeError):
             continue
-        for text, score in zip(texts, scores):
+        # Token boxes, used to put tokens in reading order (paddle_ocr
+        # _order_candidates). Optional: missing/odd shapes just mean no box.
+        try:
+            polys = page["rec_polys"]
+        except (KeyError, TypeError):
+            polys = None
+        for idx, (text, score) in enumerate(zip(texts, scores)):
             if not text or not str(text).strip():
                 continue
-            candidates.append({"text": str(text), "confidence": round(float(score), 3)})
+            cand = {"text": str(text), "confidence": round(float(score), 3)}
+            try:
+                box = [[float(pt[0]), float(pt[1])] for pt in polys[idx]]
+                if len(box) >= 2:
+                    cand["box"] = box
+            except Exception:
+                pass
+            candidates.append(cand)
     return candidates
 
 

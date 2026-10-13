@@ -17,6 +17,12 @@ All settings are managed through `config/default.yaml`. Restart the application 
 | `ocr.inference_timeout_s` | `10` | PaddleOCR only: a call slower than this kills and restarts the OCR worker; the cycle is NOK with `failure_reason: ocr_engine_error` |
 | `ocr.dynamic_roi.dot_text.enabled` | `true` | OCRead only: remove ribs/mold lines by shape and re-render the print as dark text on white before recognition (replaces `derib_enabled`). Compare variants on real frames with `python -m QC_tools.compare_ocr_preprocessing` |
 | `ocr.dynamic_roi.dot_text.bridge_sigma_px` | `0.0` | Merge separate dots into strokes ("slight defocus" done in software). Try 0.5–1.0 on sharp frames |
+| `ocr.dynamic_roi.dot_text.illumination` | `"divide"` | `divide` = flat-field by estimated illumination incl. rib shadows (ink in a shadow keeps full contrast); `subtract` = first version |
+| `ocr.read_validation.enabled` | `true` | OCRead: report OK only for a read that fits the print template, is confident enough, and (consensus) is confirmed by independent reads. Otherwise NOK with `failure_reason` `format_mismatch` / `low_confidence` / `invalid_value` / `no_consensus` |
+| `ocr.read_validation.template` | `["#### ##:##", "BB ##/##"]` | One entry per printed line: `#` digit, `A` letter, `*` any, space = field gap, other characters literal. Product-specific |
+| `ocr.read_validation.value_pattern` | hours/minutes/month regex | Regex the canonical code must fully match; `''` disables |
+| `ocr.read_validation.min_confidence` | `0.80` | Minimum recognizer confidence for every token used. Calibrate with the QC tool |
+| `ocr.read_validation.consensus.variants` / `min_agree` | `[dot_divide, dot_subtract, classic]` / `2` | Preprocessing variants read in order until `min_agree` validated reads agree. `min_agree: 1` = single read (faster, less protection against confident misreads) |
 | `ocr.allowed_chars` | letters, digits, `" :/.-"` | PaddleOCR only: tokens without any of these are dropped; other disallowed characters become `?`. `""` disables the filter |
 | `camera.index` | `0` | USB camera index; run `tests/camera_test.py` to find yours |
 | `camera.flip` | `-1` | `0` = none, `1` = horizontal, `-1` = vertical |

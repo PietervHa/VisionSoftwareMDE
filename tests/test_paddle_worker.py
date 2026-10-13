@@ -137,6 +137,9 @@ class PaddleOCRResultTests(unittest.TestCase):
         engine.orientation_retry_enabled = True
         engine.orientation_retry_require_low_confidence = True
         engine.orientation_retry_confidence_threshold = 0.8
+        # These tests cover the raw-read path; validation has its own tests.
+        engine.validator = None
+        engine.consensus_variants = [None]
         return engine
 
     def _blank_frame(self):

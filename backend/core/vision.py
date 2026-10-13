@@ -188,6 +188,11 @@ def _normalize_result(result: dict, mode: str) -> dict:
         if has_error:
             normalized["status"] = "NOK"
             normalized.setdefault("failure_reason", "ocr_engine_error")
+        elif isinstance(normalized.get("validation"), dict) and not normalized["validation"].get("accepted", True):
+            # Read did not pass read_validation (format/confidence/consensus):
+            # an explicit reject with its reason, never a guessed OK.
+            normalized["status"] = "NOK"
+            normalized.setdefault("failure_reason", normalized["validation"].get("reason") or "format_mismatch")
         elif not normalized["text"].strip() and not normalized["detections"]:
             normalized["status"] = "NOK"
             normalized.setdefault("failure_reason", "no_text_detected")

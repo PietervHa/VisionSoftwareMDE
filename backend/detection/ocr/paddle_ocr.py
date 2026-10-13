@@ -11,12 +11,15 @@ import time
 import logging
 import os
 import string
+import unicodedata
+from collections import Counter
 from backend.detection.ocr.paddle_worker import PaddleOCRWorker, PaddleWorkerError
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
 from backend.utils.roi import apply_roi, draw_roi
 from backend.detection.ocr.text_locator import locate_text_region, deskew_crop
 from backend.detection.ocr.dot_text import clean_dot_text
+from backend.detection.ocr.code_validator import CodeTemplate, REJECT_CONSENSUS
 
 log = get_logger(__name__)
 
@@ -96,6 +99,28 @@ class PaddleOCR:
         self.dot_text_cfg = dot_text_cfg
         if self.dot_text_enabled and self.derib_enabled:
             log.info("ocr.dynamic_roi.dot_text is enabled, so derib_enabled is ignored for OCRead crops.")
+
+        # Read validation (OCRead) - see code_validator.py. When enabled, a
+        # read is only reported OK if it fits the configured print template
+        # with enough confidence and (consensus) enough independently
+        # preprocessed reads agree; otherwise NOK with a reason instead of
+        # forwarding a guess to the PLC.
+        val_cfg = ocr_cfg.get("read_validation") if isinstance(ocr_cfg.get("read_validation"), dict) else {}
+        self.validator = None
+        self.consensus_variants = [None]
+        self.consensus_min_agree = 1
+        if val_cfg.get("enabled", False):
+            self.validator = CodeTemplate.from_config(val_cfg)
+            cons = val_cfg.get("consensus") if isinstance(val_cfg.get("consensus"), dict) else {}
+            variants = [str(v) for v in (cons.get("variants") or [])] or [None]
+            unknown = [v for v in variants if v is not None and v not in self.PREPROCESS_VARIANTS]
+            if unknown:
+                raise ValueError(f"ocr.read_validation.consensus.variants: unknown {unknown}; "
+                                 f"choose from {sorted(self.PREPROCESS_VARIANTS)}")
+            self.consensus_variants = variants
+            self.consensus_min_agree = max(1, min(int(cons.get("min_agree", 1)), len(variants)))
+            log.info("OCRead validation: template=%s variants=%s min_agree=%d min_confidence=%.2f",
+                     self.validator.lines, variants, self.consensus_min_agree, self.validator.min_confidence)
 
         # Orientation retry (OCRead / dynamic ROI only): deskew_crop()
         # resolves *which way* a rotated line is tilted, but not whether
@@ -383,7 +408,8 @@ class PaddleOCR:
 
         return apply_roi(frame, roi), None
 
-    def _write_ocr_result_debug(self, debug_dir, display_frame, candidates, elapsed_ms, extra_lines=None):
+    def _write_ocr_result_debug(self, debug_dir, display_frame, candidates, elapsed_ms, extra_lines=None,
+                                name="ocr_result.png"):
         """Write the actual OCR outcome (not just the crop) into the same
         per-cycle debug folder text_locator.py used, so a debug capture
         shows what was read, not only where the crop came from - reviewing
@@ -424,9 +450,49 @@ class PaddleOCR:
             canvas[:h, :w] = img
             caption = full_text if full_text else "(no text detected)"
             cv2.putText(canvas, caption, (5, h + 21), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
-            cv2.imwrite(os.path.join(debug_dir, "ocr_result.png"), canvas)
+            cv2.imwrite(os.path.join(debug_dir, name), canvas)
         except Exception as exc:  # pragma: no cover - debug aid only, never fatal
             log.warning("OCR result debug write failed (non-fatal): %s", exc)
+
+    # Preprocessing variants usable for consensus reads (read_validation).
+    PREPROCESS_VARIANTS = {
+        "dot",           # dot_text with its configured illumination model
+        "dot_divide",    # dot_text, flat-field (divide)
+        "dot_subtract",  # dot_text, subtractive
+        "classic",       # grayscale + upscale + CLAHE (previous default, no derib)
+        "classic_derib", # previous default with rib inpainting
+    }
+
+    @staticmethod
+    def _order_candidates(candidates):
+        """Order tokens in reading order from their boxes: group into lines
+        by vertical centre, top to bottom, then left to right inside a line.
+        The model's own output order isn't guaranteed to be reading order
+        (seen: "BB 4113 08:26 05/26"). Left unchanged if any box is missing."""
+        if not candidates or not all(
+            isinstance(c.get("box"), (list, tuple)) and len(c["box"]) >= 2 for c in candidates
+        ):
+            return candidates
+        items = []
+        for c in candidates:
+            try:
+                xs = [float(p[0]) for p in c["box"]]
+                ys = [float(p[1]) for p in c["box"]]
+            except (TypeError, ValueError, IndexError):
+                return candidates
+            items.append([(min(ys) + max(ys)) / 2.0, max(ys) - min(ys), min(xs), c])
+        items.sort(key=lambda it: it[0])
+        lines = []
+        for it in items:
+            if lines:
+                line = lines[-1]
+                centre = sum(i[0] for i in line) / len(line)
+                height = max(max(i[1] for i in line), it[1], 1.0)
+                if abs(it[0] - centre) < 0.5 * height:
+                    line.append(it)
+                    continue
+            lines.append([it])
+        return [it[3] for line in lines for it in sorted(line, key=lambda i: i[2])]
 
     def _sanitize_candidates(self, candidates):
         """Restrict OCR output to the characters the print can contain.
@@ -447,7 +513,7 @@ class PaddleOCR:
             return candidates
         cleaned = []
         for cand in candidates:
-            text = str(cand.get("text", ""))
+            text = unicodedata.normalize("NFKC", str(cand.get("text", "")))
             if not any(ch in allowed and not ch.isspace() for ch in text):
                 log.debug("OCR output filter: dropped token %r (no allowed characters)", text)
                 continue
@@ -483,7 +549,52 @@ class PaddleOCR:
         """
         return sum(c["confidence"] * len(c["text"].strip()) for c in candidates)
 
-    def _recognize(self, frame, profile=False, dynamic_roi=False):
+    def _prepare(self, frame, dynamic_roi=False):
+        """ROI/locate + deskew + downscale, done once per frame even when
+        several preprocessing variants are read. Returns
+        (raw_crop, cycle_debug_dir, profile_data)."""
+        profile_data = {}
+        t0 = time.perf_counter()
+        roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
+        profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
+
+        t1 = time.perf_counter()
+        roi_frame = self._downscale_roi(roi_frame)
+        profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
+
+        # Save the crop as it stands BEFORE any preprocessing (raw pixels,
+        # for tuning classical-CV stages offline against real frames;
+        # ocr_result*.png shows what the recognizer actually got).
+        if cycle_debug_dir:
+            try:
+                os.makedirs(cycle_debug_dir, exist_ok=True)
+                cv2.imwrite(os.path.join(cycle_debug_dir, "crop_raw_preprocess.png"), roi_frame)
+            except Exception as exc:  # pragma: no cover - debug aid only
+                log.warning("Raw crop debug write failed (non-fatal): %s", exc)
+        return roi_frame, cycle_debug_dir, profile_data
+
+    def _preprocess_variant(self, crop, variant, dynamic_roi, profile_data):
+        if variant is None:
+            if dynamic_roi and self.dot_text_enabled:
+                variant = "dot"
+            elif dynamic_roi and self.derib_enabled:
+                variant = "classic_derib"
+            else:
+                variant = "classic"
+        if variant.startswith("dot"):
+            cfg = dict(self.dot_text_cfg or {})
+            if variant == "dot_divide":
+                cfg["illumination"] = "divide"
+            elif variant == "dot_subtract":
+                cfg["illumination"] = "subtract"
+            return clean_dot_text(crop, cfg)
+        if variant == "classic_derib":
+            t_derib = time.perf_counter()
+            crop = self._derib_crop(crop)
+            profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
+        return self._preprocess_image(crop)
+
+    def _recognize(self, frame, profile=False, dynamic_roi=False, variant=None, prepared=None):
         """
         Shared pipeline: ROI, downscale, and the actual PaddleOCR inference call.
 
@@ -514,42 +625,16 @@ class PaddleOCR:
         # show - see self.slow_cycle_log_threshold_ms in __init__. profile=
         # still controls whether this comes back in the returned result
         # dict for benchmarks/ocr_benchmark.py.
-        profile_data = {}
-
-        t0 = time.perf_counter()
-        roi_frame, cycle_debug_dir = self._apply_roi(frame, dynamic=dynamic_roi)
-        profile_data["roi_ms"] = round((time.perf_counter() - t0) * 1000, 3)
-
-        use_dot_text = dynamic_roi and self.dot_text_enabled
-        if dynamic_roi and self.derib_enabled and not use_dot_text:
-            t_derib = time.perf_counter()
-            roi_frame = self._derib_crop(roi_frame)
-            profile_data["derib_ms"] = round((time.perf_counter() - t_derib) * 1000, 3)
-
-        t1 = time.perf_counter()
-        roi_frame = self._downscale_roi(roi_frame)
-        profile_data["downscale_ms"] = round((time.perf_counter() - t1) * 1000, 3)
-
-        # Save the crop as it stands BEFORE CLAHE/upscaling. ocr_result.png
-        # is written post-preprocess, which is the right thing to see when
-        # asking "what did the recognizer actually get" - but it's the
-        # wrong input for tuning any classical-CV stage that runs on the
-        # raw crop (line splitting, rib detection, thresholding), since
-        # CLAHE and a 2x cubic upscale change the pixel statistics those
-        # stages key off. Writing both means such work can be tuned
-        # offline against real frames instead of guessing.
-        if cycle_debug_dir:
-            try:
-                os.makedirs(cycle_debug_dir, exist_ok=True)
-                cv2.imwrite(os.path.join(cycle_debug_dir, "crop_raw_preprocess.png"), roi_frame)
-            except Exception as exc:  # pragma: no cover - debug aid only
-                log.warning("Raw crop debug write failed (non-fatal): %s", exc)
+        # Timings are collected unconditionally (cheap) so the slow-cycle log
+        # always has a stage breakdown; profile= only controls whether they
+        # are returned in the result (benchmarks/ocr_benchmark.py).
+        if prepared is None:
+            prepared = self._prepare(frame, dynamic_roi)
+        raw_crop, cycle_debug_dir, prep_profile = prepared
+        profile_data = dict(prep_profile)
 
         t1b = time.perf_counter()
-        if use_dot_text:
-            roi_frame = clean_dot_text(roi_frame, self.dot_text_cfg)
-        else:
-            roi_frame = self._preprocess_image(roi_frame)
+        roi_frame = self._preprocess_variant(raw_crop, variant, dynamic_roi, profile_data)
         profile_data["preprocess_ms"] = round((time.perf_counter() - t1b) * 1000, 3)
 
         debug_enabled = log.isEnabledFor(logging.DEBUG)
@@ -572,7 +657,7 @@ class PaddleOCR:
             # back a plain list of {"text", "confidence"} dicts - nothing
             # further to unpack here regardless of which PaddleOCR version
             # produced it.
-            candidates = self._sanitize_candidates(self._paddle.ocr(roi_frame) or [])
+            candidates = self._order_candidates(self._sanitize_candidates(self._paddle.ocr(roi_frame) or []))
             if debug_enabled:
                 log.debug("PaddleOCR result count=%s", len(candidates))
         except PaddleWorkerError as e:
@@ -606,7 +691,8 @@ class PaddleOCR:
                 flipped_frame = None
                 try:
                     flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
-                    flipped_candidates = self._sanitize_candidates(self._paddle.ocr(flipped_frame) or [])
+                    flipped_candidates = self._order_candidates(
+                        self._sanitize_candidates(self._paddle.ocr(flipped_frame) or []))
                 except Exception as exc:
                     flipped_frame = None
                     if not candidates:
@@ -659,6 +745,7 @@ class PaddleOCR:
         if cycle_debug_dir:
             self._write_ocr_result_debug(
                 cycle_debug_dir, roi_frame, candidates, elapsed_ms,
+                name=f"ocr_result_{variant}.png" if variant else "ocr_result.png",
                 extra_lines=[
                     f"used_flipped_orientation={used_flipped}",
                 ] + ([retry_audit] if retry_audit else []),
@@ -721,37 +808,90 @@ class PaddleOCR:
 
     def read(self, frame, profile=False):
         """
-        Executes OCR on the provided frame and returns every recognized piece
-        of text as-is, with no keyword/date matching.
+        OCRead: read the printed code from the frame.
 
-        Used by the OCRead mode: the comparison against the expected text is
-        made on the PLC, not here, so nothing is filtered out or judged
-        OK/NOK - the raw read-out is simply reported back.
+        Without ocr.read_validation: one read, every recognized token joined
+        as-is (any text = OK; the PLC does the comparison).
 
-        Uses the dynamic (classical-CV) ROI locator when enabled, since
-        this is the mode that needs to track the text wherever it actually
-        printed on each bottle - see _apply_roi().
+        With ocr.read_validation (production): the crop is prepared once and
+        read with up to N preprocessing variants (consensus.variants). Each
+        read is fielded against the print template (code_validator.py). The
+        result is OK only when at least consensus.min_agree reads produce
+        the same validated code; "text" is then the canonical code (e.g.
+        "4113 08:26 BB 05/26"). Otherwise status NOK with failure_reason
+        format_mismatch / low_confidence / invalid_value / no_consensus /
+        no_text_detected, and "text" holds the raw read for display only.
+        Stops as soon as the outcome is decided, so a clean bottle costs
+        min_agree reads, not N.
         """
-        candidates, elapsed_ms, profile_data, engine_error = self._recognize(frame, profile=profile, dynamic_roi=True)
+        if self.validator is None:
+            candidates, elapsed_ms, profile_data, engine_error = self._recognize(frame, profile=profile, dynamic_roi=True)
+            full_text = " ".join(c["text"] for c in candidates).strip()
+            log.debug("PaddleOCR read completed: processing_time_ms=%.1f detections=%s text=%r",
+                      elapsed_ms, len(candidates), full_text)
+            result = {
+                "detections": candidates,
+                "text": full_text,
+                "processing_time_ms": round(elapsed_ms, 1),
+                "mode": "ocread",
+            }
+            if engine_error:
+                result["error"] = engine_error
+            if profile:
+                result["_profile_ms"] = profile_data
+            return result
 
-        processing_time_ms = round(elapsed_ms, 1)
-        full_text = " ".join(c["text"] for c in candidates).strip()
-        log.debug(
-            "PaddleOCR read completed: processing_time_ms=%s detections=%s text=%r",
-            processing_time_ms,
-            len(candidates),
-            full_text,
-        )
+        prepared = self._prepare(frame, dynamic_roi=True)
+        variants = self.consensus_variants
+        need = self.consensus_min_agree
+        reads, votes = [], Counter()
+        total_ms, profile_data = 0.0, {}
+        for i, variant in enumerate(variants):
+            candidates, elapsed_ms, profile_data, engine_error = self._recognize(
+                frame, profile=profile, dynamic_roi=True, variant=variant, prepared=prepared)
+            total_ms += elapsed_ms
+            if engine_error:
+                result = {"detections": candidates, "text": "", "processing_time_ms": round(total_ms, 1),
+                          "mode": "ocread", "error": engine_error}
+                if profile:
+                    result["_profile_ms"] = profile_data
+                return result
+            verdict = self.validator.validate(candidates)
+            reads.append({"variant": variant, "candidates": candidates, **verdict})
+            if verdict["accepted"]:
+                votes[verdict["text"]] += 1
+                if votes[verdict["text"]] >= need:
+                    break
+            remaining = len(variants) - i - 1
+            if max(votes.values(), default=0) + remaining < need:
+                break
+
+        winner, count = votes.most_common(1)[0] if votes else (None, 0)
+        accepted = winner is not None and count >= need
+        primary = reads[0]
+        if accepted:
+            source = next(r for r in reads if r["accepted"] and r.get("text") == winner)
+            text, reason = winner, None
+        else:
+            source = primary
+            text = primary["raw_text"]
+            reason = REJECT_CONSENSUS if votes else primary["reason"]
+
+        summary = [
+            {k: r.get(k) for k in ("variant", "accepted", "reason", "text", "raw_text", "corrections",
+                                   "literal_fixes", "ignored_tokens", "orientation", "min_token_confidence")}
+            for r in reads
+        ]
+        log.debug("OCRead validation: accepted=%s text=%r reason=%s reads=%s", accepted, text, reason, summary)
         result = {
-            "detections": candidates,
-            "text": full_text,
-            "processing_time_ms": processing_time_ms,
+            "detections": source["candidates"],
+            "text": text,
+            "processing_time_ms": round(total_ms, 1),
             "mode": "ocread",
+            "validation": {"accepted": accepted, "reason": reason, "reads": summary},
         }
-        if engine_error:
-            result["error"] = engine_error
-
+        if not accepted:
+            result["failure_reason"] = reason
         if profile:
             result["_profile_ms"] = profile_data
-
         return result

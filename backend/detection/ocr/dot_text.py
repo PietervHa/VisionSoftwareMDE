@@ -74,6 +74,13 @@ DEFAULTS = {
     # 0 = off. The "slightly defocused camera reads better" effect, done in
     # software; tune on real sharp frames.
     "bridge_sigma_px": 0.0,
+    # How ribs/lighting are removed from the ink:
+    #   "divide"   - flat-field: image / estimated illumination (including
+    #                rib shadows). Physically correct for shading: ink in a
+    #                rib's shadow keeps its full contrast.
+    #   "subtract" - ink map minus rib darkness (first version). Ink lying
+    #                in a rib shadow loses part of its contrast.
+    "illumination": "divide",
 }
 
 _kernel_cache: dict = {}
@@ -114,20 +121,38 @@ def clean_dot_text(crop: np.ndarray, cfg: dict | None = None, debug: dict | None
     """
     p = dict(DEFAULTS)
     if cfg:
-        p.update({k: v for k, v in cfg.items() if k in DEFAULTS and v is not None})
+        p.update({key: v for key, v in cfg.items() if key in DEFAULTS and v is not None})
 
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    gray_f = gray.astype(np.float32)
     k = max(3, int(p["ink_kernel_px"]) | 1)
-    ink = cv2.morphologyEx(
-        gray, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    ).astype(np.float32)
+    # Background without anything small and dark: removes the print, but
+    # also thin rib shadow lines (they're narrow too).
+    background = cv2.morphologyEx(
+        gray_f, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    )
+    ink = background - gray_f  # == blackhat
 
+    # Long straight dark structures (rib shadow edges, mold lines): grayscale
+    # opening with 1px line kernels keeps only what is at least `length`
+    # long in that direction. Print is far shorter, so it isn't in here.
     lines = np.zeros_like(ink)
     length = int(p["line_min_length_px"])
     if length >= 3 and int(p["line_angles"]) > 0:
         for lk in _line_kernels(length, int(p["line_angles"])):
             np.maximum(lines, cv2.morphologyEx(ink, cv2.MORPH_OPEN, lk), out=lines)
-    text_ink = np.clip(ink - lines, 0, None)
+
+    if str(p["illumination"]).lower() == "subtract":
+        text_ink = np.clip(ink - lines, 0, None)
+    else:
+        # Illumination = background with the long shadow lines put back.
+        # Dividing by it turns the image into relative reflectance (~1 for
+        # plastic, ~0.3 for ink) independent of rib shadows and lighting
+        # gradients; ink is the relative darkening. Scaled by the median
+        # background so the thresholds below see the same range as before.
+        illumination = np.maximum(background - lines, 1.0)
+        reflectance = gray_f / illumination
+        text_ink = np.clip(1.0 - reflectance, 0, None) * float(np.median(background))
 
     ceil = float(np.percentile(text_ink, 99.5))
     if ceil <= 0:

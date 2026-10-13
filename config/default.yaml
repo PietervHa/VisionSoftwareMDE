@@ -91,6 +91,40 @@ ocr:
   # turns specks into CJK characters. Set to "" to disable the filter.
   allowed_chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 :/.-'
 
+  # OCRead read validation (backend/detection/ocr/code_validator.py).
+  # Without it, ANY recognized text was status OK and went to the PLC -
+  # including "4113 08:2", "08.26", "B8 05/26". With it, a read is only OK
+  # when it fits the print format, with enough confidence, and enough
+  # independently preprocessed reads agree; otherwise NOK with a reason
+  # (format_mismatch / low_confidence / invalid_value / no_consensus), shown
+  # on the HMI together with what was read. On OK the PLC receives the
+  # canonical code, e.g. "4113 08:26 BB 05/26" (always this spacing).
+  read_validation:
+    enabled: true
+    # One entry per printed line. # = digit, A = letter, * = any character,
+    # space = gap between fields, anything else must be printed literally.
+    # This is product-specific: change it when the printer format changes.
+    template: ["#### ##:##", "BB ##/##"]
+    # Optional regex the canonical code must fully match (value sanity:
+    # hour 00-23, minute 00-59, month 01-12). '' to disable.
+    value_pattern: '^\d{4} ([01]\d|2[0-3]):[0-5]\d BB (0[1-9]|1[0-2])/\d{2}$'
+    # Every token used for the code must be at least this confident.
+    # Calibrate on real frames (QC_tools/compare_ocr_preprocessing.py prints
+    # the confidences); good reads in the results DB score 0.96-1.0.
+    min_confidence: 0.80
+    # Letter->digit look-alike fixes allowed in digit positions (O->0, B->8,
+    # ...). Digits are never changed into other digits.
+    max_corrections: 1
+    # Extra tokens next to the code that may be ignored (embossed "PE/PA",
+    # a stray "."). Text is never cut out of the middle of a token.
+    max_ignored_tokens: 3
+    consensus:
+      # Preprocessing variants read in this order, stopping as soon as
+      # min_agree validated reads agree (or agreement became impossible).
+      # dot_divide / dot_subtract / dot (as configured) / classic / classic_derib
+      variants: [dot_divide, dot_subtract, classic]
+      min_agree: 2
+
   # PaddleOCR only: enables MKL-DNN (oneDNN) CPU acceleration.
   #
   # true here assumes paddlepaddle==3.2.2 (not 3.3.x) - see the pip
