@@ -13,6 +13,7 @@ import os
 import string
 import unicodedata
 from collections import Counter
+from pathlib import Path
 from backend.detection.ocr.paddle_worker import PaddleOCRWorker, PaddleWorkerError
 from backend.core.config_loader import cfg
 from backend.utils.logger import get_logger
@@ -24,6 +25,19 @@ from backend.detection.ocr.code_validator import CodeTemplate, REJECT_CONSENSUS
 log = get_logger(__name__)
 
 logging.getLogger("ppocr").setLevel(logging.ERROR)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def resolve_project_path(path) -> str:
+    """Relative paths in the config are relative to the project root - the
+    same as data/results and data/logs - NOT to whatever folder the app was
+    started from. (debug_dir used to be taken relative to the working
+    directory, so starting the app from backend/ silently wrote the debug
+    captures to backend/data/debug/dynamic_roi.)"""
+    p = Path(str(path))
+    return str(p if p.is_absolute() else PROJECT_ROOT / p)
+
 
 # Characters OCR output is allowed to contain unless ocr.allowed_chars
 # overrides it - see _sanitize_candidates().
@@ -63,7 +77,12 @@ class PaddleOCR:
         dynamic_roi_cfg = ocr_cfg.get("dynamic_roi", {}) if isinstance(ocr_cfg.get("dynamic_roi"), dict) else {}
         self.dynamic_roi_enabled = bool(dynamic_roi_cfg.get("enabled", False))
         self.dynamic_roi_cfg = dynamic_roi_cfg
-        self.dynamic_roi_debug_dir = dynamic_roi_cfg.get("debug_dir") if dynamic_roi_cfg.get("debug_save") else None
+        self.dynamic_roi_debug_dir = (
+            resolve_project_path(dynamic_roi_cfg.get("debug_dir") or "data/debug/dynamic_roi")
+            if dynamic_roi_cfg.get("debug_save") else None
+        )
+        if self.dynamic_roi_debug_dir:
+            log.info("OCRead debug captures are written to %s", self.dynamic_roi_debug_dir)
 
         # Rib inpainting (OCRead / dynamic ROI only): on this cap, the
         # mold rib crosses directly through the same 1-2 leading
@@ -435,7 +454,7 @@ class PaddleOCR:
             report = "\n".join(header_lines + body_lines) + "\n"
 
             os.makedirs(debug_dir, exist_ok=True)
-            with open(os.path.join(debug_dir, "ocr_result.txt"), "w", encoding="utf-8") as f:
+            with open(os.path.join(debug_dir, os.path.splitext(name)[0] + ".txt"), "w", encoding="utf-8") as f:
                 f.write(report)
 
             # Captioned image too, for a quick visual glance without having
