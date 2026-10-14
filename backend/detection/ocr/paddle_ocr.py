@@ -60,6 +60,24 @@ class PaddleOCR:
             text_recognition_model_name=ocr_cfg.get("text_recognition_model_name") or None,
             inference_timeout=float(ocr_cfg.get("inference_timeout_s", 10.0)),
         )
+        # OCRead-only recognizer (e.g. PaddleOCR fine-tuned on this printer's
+        # dot print - docs/finetune_ocread.md). The OCR pipeline keeps using
+        # the general model above; only OCRead reads with this one.
+        rec_cfg = ocr_cfg.get("ocread_recognition") if isinstance(ocr_cfg.get("ocread_recognition"), dict) else {}
+        self._paddle_ocread = None
+        if rec_cfg.get("model_dir"):
+            model_dir = resolve_project_path(rec_cfg["model_dir"])
+            log.info("OCRead uses the recognizer in %s", model_dir)
+            self._paddle_ocread = PaddleOCRWorker(
+                lang="en",
+                cpu_threads=int(ocr_cfg.get("cpu_threads", 4)),
+                use_angle_cls=bool(ocr_cfg.get("use_angle_cls", True)),
+                enable_mkldnn=bool(ocr_cfg.get("enable_mkldnn", True)),
+                text_detection_model_name=ocr_cfg.get("text_detection_model_name") or None,
+                text_recognition_model_name=rec_cfg.get("model_name") or "PP-OCRv5_mobile_rec",
+                text_recognition_model_dir=model_dir,
+                inference_timeout=float(ocr_cfg.get("inference_timeout_s", 10.0)),
+            )
         self.keywords = [w.lower() for w in ocr_cfg["keywords"]]
         self.keyword_set = set(self.keywords)
         self.date_regex = ocr_cfg["date_regex"]
@@ -206,12 +224,19 @@ class PaddleOCR:
             self.dot_text_enabled,
         )
 
+    def _rec_worker(self, dynamic_roi):
+        """OCRead (dynamic ROI) reads with the OCRead-only recognizer when one
+        is configured; everything else with the general one."""
+        return self._paddle_ocread if (dynamic_roi and self._paddle_ocread is not None) else self._paddle
+
     def warmup(self) -> None:
         """Runs one throwaway OCR pass so Paddle's native-runtime cold-start
         cost is paid at startup instead of during the first real OCR cycle."""
         try:
             import numpy as np
             self._paddle.ocr(np.zeros((64, 64, 3), dtype="uint8"))
+            if self._paddle_ocread is not None:
+                self._paddle_ocread.ocr(np.zeros((64, 64, 3), dtype="uint8"))
             log.debug("PaddleOCR warm-up inference completed.")
         except Exception as exc:
             log.warning("PaddleOCR warm-up inference failed (non-fatal): %s", exc)
@@ -676,7 +701,7 @@ class PaddleOCR:
             # back a plain list of {"text", "confidence"} dicts - nothing
             # further to unpack here regardless of which PaddleOCR version
             # produced it.
-            candidates = self._order_candidates(self._sanitize_candidates(self._paddle.ocr(roi_frame) or []))
+            candidates = self._order_candidates(self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(roi_frame) or []))
             if debug_enabled:
                 log.debug("PaddleOCR result count=%s", len(candidates))
         except PaddleWorkerError as e:
@@ -711,7 +736,7 @@ class PaddleOCR:
                 try:
                     flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
                     flipped_candidates = self._order_candidates(
-                        self._sanitize_candidates(self._paddle.ocr(flipped_frame) or []))
+                        self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(flipped_frame) or []))
                 except Exception as exc:
                     flipped_frame = None
                     if not candidates:

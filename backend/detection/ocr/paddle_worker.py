@@ -79,6 +79,7 @@ def _worker_loop(
     enable_mkldnn: bool,
     text_detection_model_name: str | None,
     text_recognition_model_name: str | None,
+    text_recognition_model_dir: str | None = None,
 ) -> None:
     import os
     # PaddleOCR 3.x moved MKL-DNN control to the enable_mkldnn constructor
@@ -147,6 +148,9 @@ def _worker_loop(
             ocr_kwargs["text_detection_model_name"] = text_detection_model_name
         if text_recognition_model_name:
             ocr_kwargs["text_recognition_model_name"] = text_recognition_model_name
+        if text_recognition_model_dir:
+            # A fine-tuned recognizer exported with PaddleOCR's export_model.py
+            ocr_kwargs["text_recognition_model_dir"] = text_recognition_model_dir
 
         ocr = _PaddleOCR(**ocr_kwargs)
 
@@ -220,6 +224,7 @@ class PaddleOCRWorker:
         enable_mkldnn: bool = True,
         text_detection_model_name: str | None = None,
         text_recognition_model_name: str | None = None,
+        text_recognition_model_dir: str | None = None,
         ready_timeout: float = 60.0,
         inference_timeout: float = 10.0,
         restart_cooldown_s: float = 10.0,
@@ -231,6 +236,7 @@ class PaddleOCRWorker:
             enable_mkldnn,
             text_detection_model_name,
             text_recognition_model_name,
+            text_recognition_model_dir,
         )
         self._ready_timeout = float(ready_timeout)
         self._inference_timeout = float(inference_timeout)

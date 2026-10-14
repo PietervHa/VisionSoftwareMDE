@@ -83,6 +83,15 @@ ocr:
   # PLC already gets its NOK after trigger.timeout_s regardless.
   inference_timeout_s: 10
 
+  # OCRead-only recognizer. '' = OCRead uses the same model as the OCR
+  # pipeline. Set model_dir to a PaddleOCR recognizer fine-tuned on this
+  # printer's dot print (exported folder, see docs/finetune_ocread.md), e.g.
+  #   model_dir: models/ocread_rec
+  # The OCR pipeline keeps the general model either way.
+  ocread_recognition:
+    model_dir: 'models/ocread_rec/ocread_rec_model'  # path to the fine-tuned recognizer
+    model_name: PP-OCRv5_mobile_rec   # architecture the model was fine-tuned from
+
   # PaddleOCR only: characters OCR output may contain. Tokens with none of
   # these are dropped as noise; any other disallowed character inside a
   # token is replaced with "?" so the PLC comparison fails safely instead of

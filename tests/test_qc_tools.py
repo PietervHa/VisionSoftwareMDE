@@ -80,6 +80,47 @@ class PipelineListTests(unittest.TestCase):
         self.assertIn("configured", names); self.assertIn("bridge=0.7", names)
 
 
+class RecDatasetTests(unittest.TestCase):
+    def test_font_covers_the_dictionary_and_codes_fit_the_template(self):
+        import re
+        import numpy as np
+        from QC_tools import make_rec_dataset as m
+        self.assertTrue(all(c in m.FONT for c in m.DICT))
+        gen = m.Generator.__new__(m.Generator); gen.rng = np.random.default_rng(0)
+        for _ in range(50):
+            l1, l2 = gen._code_lines()
+            self.assertRegex(l1, r"^\d{4} ?\d{2}:\d{2}$"); self.assertRegex(l2, r"^BB ?\d{2}/\d{2}$")
+
+    def test_rib_keeps_size_and_only_changes_brightness_locally(self):
+        import numpy as np
+        from QC_tools import make_rec_dataset as m
+        img = np.full((60, 200, 3), 150, np.uint8)
+        out = m.add_rib(img, (100, 30), 90)
+        self.assertEqual(out.shape, img.shape)
+        self.assertEqual(int(out[:, 0].mean()), 150)                    # far from the rib: unchanged
+        self.assertLess(int(out[:, 60:140].min()), 150)                 # shadow side of the rib
+
+
+class OCReadRecognizerTests(unittest.TestCase):
+    def test_ocread_only_recognizer_is_loaded_and_used(self):
+        from unittest import mock
+        import numpy as np
+        from backend.detection.ocr import paddle_ocr
+        made = []
+        class W:
+            def __init__(self, **k): self.k = k; self.calls = 0; made.append(self)
+            def ocr(self, *a, **k): self.calls += 1; return []
+        real = dict(paddle_ocr.cfg["ocr"].get("ocread_recognition") or {})
+        with mock.patch.dict(paddle_ocr.cfg["ocr"], {"ocread_recognition": {"model_dir": "models/ocread_rec", "model_name": "PP-OCRv5_mobile_rec"}}), \
+             mock.patch.object(paddle_ocr, "PaddleOCRWorker", W):
+            e = paddle_ocr.PaddleOCR(app_state=None)
+        self.assertEqual(len(made), 2)
+        general, ocread = made
+        self.assertTrue(ocread.k["text_recognition_model_dir"].replace("\\", "/").endswith("models/ocread_rec"))
+        self.assertIs(e._rec_worker(True), ocread)       # OCRead
+        self.assertIs(e._rec_worker(False), general)     # OCR pipeline keeps the general model
+
+
 class FrameFolderTests(unittest.TestCase):
     def test_missing_folder_says_where_it_looked(self):
         from QC_tools import compare_ocr_preprocessing as tool
