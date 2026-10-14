@@ -89,7 +89,7 @@ ocr:
   #   model_dir: models/ocread_rec
   # The OCR pipeline keeps the general model either way.
   ocread_recognition:
-    model_dir: 'models/ocread_rec/ocread_rec_model'  # path to the fine-tuned recognizer
+    model_dir: ''
     model_name: PP-OCRv5_mobile_rec   # architecture the model was fine-tuned from
 
   # PaddleOCR only: characters OCR output may contain. Tokens with none of
@@ -220,6 +220,11 @@ ocr:
     # whole print in the crop; other bottles unchanged. 11..15 all gave the
     # same result. 0 disables.
     erase_keep_ink_blueness: 13
+
+    # Ignore detected text without printed ink (moulded PE/PA, recycling
+    # marks): a box needs at least this share of pixels clearly darker than
+    # the plastic. Measured: embossing <= 0.02, code >= 0.07. 0 = off.
+    ink_filter_min_fraction: 0.04
     # Morphological close kernel used to merge individual dots/pins of a
     # dot-matrix character back into a single connected component before
     # measuring component size. Wider than tall, since characters in a

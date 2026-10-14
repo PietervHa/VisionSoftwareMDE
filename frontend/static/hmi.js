@@ -90,7 +90,14 @@ async function updateResult() {
             } else if (["format_mismatch", "low_confidence", "invalid_value", "no_consensus", "text_too_long"].includes(result.failure_reason)) {
                 // Read was made but not accepted (read_validation): show why,
                 // plus what was read, so operators can see what it struggled with.
-                ocreadTextEl.textContent = `(not accepted: ${result.failure_reason}) ${result.text || ""}`.trim();
+                const why = {
+                    format_mismatch: "code not readable",
+                    low_confidence: "read too uncertain",
+                    invalid_value: "impossible date/time read",
+                    no_consensus: "reads disagree",
+                    text_too_long: "too much text read",
+                }[result.failure_reason] || result.failure_reason;
+                ocreadTextEl.textContent = `NOK - ${why}` + (result.text ? `  (read: ${result.text})` : "");
             } else if (result.failure_reason) {
                 // Technical failure (camera unavailable, OCR engine error,
                 // timeout, ...) - kept visually distinct from a genuine

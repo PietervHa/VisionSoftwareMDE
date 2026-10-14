@@ -125,6 +125,13 @@ class PaddleOCR:
         self.derib_min_length_frac = float(dynamic_roi_cfg.get("derib_min_length_frac", 0.6))
         self.derib_thickness = int(dynamic_roi_cfg.get("derib_thickness", 7))
 
+        # Drop detected text boxes that contain no printed ink (OCRead only):
+        # moulded "PE/PA", recycling marks etc. are relief - light and shadow,
+        # never much darker than the plastic. Real frames (14 Oct, 22 cycles):
+        # share of pixels < 0.7 x local plastic brightness inside a box was
+        # <= 0.02 for embossing and >= 0.07 for code (most 0.2-0.4). 0 = off.
+        self.ink_filter_min_fraction = float(dynamic_roi_cfg.get("ink_filter_min_fraction", 0.04))
+
         # Dot-text cleanup (OCRead / dynamic ROI only) - see dot_text.py.
         # Removes ribs/mold lines by shape instead of inpainting over them,
         # so ink printed on a rib survives, and re-renders the print as dark
@@ -538,6 +545,41 @@ class PaddleOCR:
             lines.append([it])
         return [it[3] for line in lines for it in sorted(line, key=lambda i: i[2])]
 
+    def _ink_map(self, raw_crop, shown):
+        """Per-pixel "printed ink" mask of the raw crop, at the size of the
+        image PaddleOCR is shown: pixels clearly darker than the plastic
+        around them (< 0.7 x a closing-based background)."""
+        if self.ink_filter_min_fraction <= 0 or raw_crop is None or raw_crop.size == 0:
+            return None
+        g = cv2.cvtColor(raw_crop, cv2.COLOR_BGR2GRAY) if raw_crop.ndim == 3 else raw_crop
+        g = g.astype(np.float32)
+        bg = cv2.morphologyEx(g, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (19, 19)))
+        mask = (g / np.maximum(bg, 1.0) < 0.70).astype(np.float32)
+        return cv2.resize(mask, (shown.shape[1], shown.shape[0]), interpolation=cv2.INTER_AREA)
+
+    def _ink_filter(self, candidates, ink):
+        """Drop detected boxes with (almost) no printed ink in them."""
+        if ink is None or not candidates:
+            return candidates
+        kept = []
+        for c in candidates:
+            box = c.get("box")
+            if not isinstance(box, (list, tuple)) or len(box) < 2:
+                kept.append(c); continue
+            try:
+                xs = [float(p[0]) for p in box]; ys = [float(p[1]) for p in box]
+            except (TypeError, ValueError, IndexError):
+                kept.append(c); continue
+            x0, x1 = max(0, int(min(xs))), min(ink.shape[1], int(max(xs)) + 1)
+            y0, y1 = max(0, int(min(ys))), min(ink.shape[0], int(max(ys)) + 1)
+            region = ink[y0:y1, x0:x1]
+            share = float(region.mean()) if region.size else 0.0
+            if share >= self.ink_filter_min_fraction:
+                kept.append(c)
+            else:
+                log.debug("OCRead: dropped %r - no printed ink in its box (%.3f)", c.get("text"), share)
+        return kept
+
     def _sanitize_candidates(self, candidates):
         """Restrict OCR output to the characters the print can contain.
 
@@ -701,7 +743,9 @@ class PaddleOCR:
             # back a plain list of {"text", "confidence"} dicts - nothing
             # further to unpack here regardless of which PaddleOCR version
             # produced it.
-            candidates = self._order_candidates(self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(roi_frame) or []))
+            ink = self._ink_map(raw_crop, roi_frame) if dynamic_roi else None
+            candidates = self._ink_filter(
+                self._order_candidates(self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(roi_frame) or [])), ink)
             if debug_enabled:
                 log.debug("PaddleOCR result count=%s", len(candidates))
         except PaddleWorkerError as e:
@@ -735,8 +779,9 @@ class PaddleOCR:
                 flipped_frame = None
                 try:
                     flipped_frame = cv2.rotate(roi_frame, cv2.ROTATE_180)
-                    flipped_candidates = self._order_candidates(
-                        self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(flipped_frame) or []))
+                    flipped_candidates = self._ink_filter(self._order_candidates(
+                        self._sanitize_candidates(self._rec_worker(dynamic_roi).ocr(flipped_frame) or [])),
+                        None if ink is None else ink[::-1, ::-1])
                 except Exception as exc:
                     flipped_frame = None
                     if not candidates:

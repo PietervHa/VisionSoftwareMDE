@@ -85,11 +85,22 @@ class RecDatasetTests(unittest.TestCase):
         import re
         import numpy as np
         from QC_tools import make_rec_dataset as m
-        self.assertTrue(all(c in m.FONT for c in m.DICT))
+        self.assertTrue(all(c in m.FONT for c in "0123456789B:/"))         # every code character can be printed
+        self.assertTrue(all(c in m.DICT for c in "0123456789B:/PEA"))      # and read, incl. embossed PE/PA letters
         gen = m.Generator.__new__(m.Generator); gen.rng = np.random.default_rng(0)
         for _ in range(50):
             l1, l2 = gen._code_lines()
             self.assertRegex(l1, r"^\d{4} ?\d{2}:\d{2}$"); self.assertRegex(l2, r"^BB ?\d{2}/\d{2}$")
+
+    def test_emboss_is_relief_not_ink(self):
+        import numpy as np
+        from QC_tools import make_rec_dataset as m
+        img = np.full((60, 160, 3), 150, np.uint8)
+        out, box = m.emboss(img, 10, 15, 22, "PE/PA", np.random.default_rng(0))
+        self.assertEqual(out.shape, img.shape)
+        self.assertGreater(int(out.max()), 150); self.assertLess(int(out.min()), 150)   # light AND shadow
+        self.assertLess(abs(float(out.mean()) - 150), 6)                                # no dark ink blob
+        self.assertGreater(box[2] - box[0], 30)
 
     def test_rib_keeps_size_and_only_changes_brightness_locally(self):
         import numpy as np
@@ -119,6 +130,30 @@ class OCReadRecognizerTests(unittest.TestCase):
         self.assertTrue(ocread.k["text_recognition_model_dir"].replace("\\", "/").endswith("models/ocread_rec"))
         self.assertIs(e._rec_worker(True), ocread)       # OCRead
         self.assertIs(e._rec_worker(False), general)     # OCR pipeline keeps the general model
+
+
+class InkFilterTests(unittest.TestCase):
+    def test_embossing_box_is_dropped_and_ink_box_kept(self):
+        from unittest import mock
+        import numpy as np, cv2
+        from backend.detection.ocr import paddle_ocr
+        class W:
+            def __init__(self, **k): pass
+        with mock.patch.object(paddle_ocr, "PaddleOCRWorker", W):
+            e = paddle_ocr.PaddleOCR(app_state=None)
+        raw = np.full((120, 240, 3), 160, np.uint8)
+        cv2.putText(raw, "4113", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (60, 45, 40), 3)      # printed ink
+        emb = raw.astype(np.float32); emb[20:50, 150:230] *= 0.9; emb[22:48, 152:228] *= 1.08   # relief only
+        raw = np.clip(emb, 0, 255).astype(np.uint8)
+        shown = cv2.resize(raw, None, fx=2, fy=2)
+        ink = e._ink_map(raw, shown)
+        box = lambda x0, y0, x1, y1: [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+        cands = [{"text": "4113", "box": box(30, 100, 220, 190)}, {"text": "PE", "box": box(300, 40, 460, 100)},
+                 {"text": "nobox"}]
+        kept = [c["text"] for c in e._ink_filter(cands, ink)]
+        self.assertEqual(kept, ["4113", "nobox"])
+        e.ink_filter_min_fraction = 0
+        self.assertIsNone(e._ink_map(raw, shown))
 
 
 class FrameFolderTests(unittest.TestCase):
