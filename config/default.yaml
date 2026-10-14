@@ -205,6 +205,12 @@ ocr:
     reject_long_lines: true
     long_line_min_length_px: 60
     long_line_erase_thickness_px: 6
+    # Put back blue ink that the rib eraser wiped together with a rib
+    # (blueness B-(R+G)/2: ink about +13..+18, rib shadow +5..+7). Real
+    # frames: 5307 bottle found on 20/21 frames instead of 14/21, with the
+    # whole print in the crop; other bottles unchanged. 11..15 all gave the
+    # same result. 0 disables.
+    erase_keep_ink_blueness: 13
     # Morphological close kernel used to merge individual dots/pins of a
     # dot-matrix character back into a single connected component before
     # measuring component size. Wider than tall, since characters in a

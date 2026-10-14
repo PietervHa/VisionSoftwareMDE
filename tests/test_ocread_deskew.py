@@ -150,5 +150,30 @@ class DeskewOrientationTests(unittest.TestCase):
             self.assertTrue(_is_upright(crop), f"crop upside-down at tilt {theta}")
 
 
+
+class RibEraserKeepsOnlyInkTests(unittest.TestCase):
+    def test_grey_rib_alone_is_not_restored(self):
+        # A long neutral-grey rib and nothing else: restoring by colour must
+        # not bring it back, so no "text" is found.
+        frame = np.full((FRAME_H, FRAME_W, 3), 170, np.uint8)
+        cv2.line(frame, (40, 240), (700, 250), (110, 110, 110), 3)
+        cfg = dict(DYN_CFG, reject_long_lines=True, erase_keep_ink_blueness=13)
+        self.assertIsNone(locate_text_region(frame, cfg))
+
+    def test_blue_ink_on_a_rib_is_kept(self):
+        frame = np.full((FRAME_H, FRAME_W, 3), 170, np.uint8)
+        cv2.line(frame, (40, 240), (700, 240), (110, 110, 110), 3)      # rib along the text line
+        x = 250
+        for ch in "8888111":
+            cv2.putText(frame, ch, (x, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (95, 45, 40), 2, cv2.LINE_AA)  # blue-black ink (BGR)
+            x += CHAR_PITCH_PX
+        cfg = dict(DYN_CFG, reject_long_lines=True)
+        off = locate_text_region(frame, dict(cfg, erase_keep_ink_blueness=0))
+        on = locate_text_region(frame, dict(cfg, erase_keep_ink_blueness=13))
+        self.assertIsNotNone(on)
+        width = lambda loc: 0 if loc is None else loc["bbox"][2] - loc["bbox"][0]
+        self.assertGreaterEqual(width(on), width(off))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -121,11 +121,26 @@ def locate_text_region(frame: np.ndarray, dyn_cfg: dict, debug_dir: Optional[str
     # same pixels), but that's a small, local loss compared to the
     # alternative of the rib dominating the whole cluster selection.
     if dyn_cfg.get("reject_long_lines", True):
+        before_erase = dark_mask
         dark_mask = _erase_long_lines(
             dark_mask,
             min_length=int(dyn_cfg.get("long_line_min_length_px", 90)),
             thickness=int(dyn_cfg.get("long_line_erase_thickness_px", 6)),
         )
+        # Put back the INK the eraser wiped together with a rib. The band it
+        # paints along a rib also covers print lying on that rib - on the
+        # 5307 bottle a rib runs along the first text line, so most of the
+        # print was erased and the locator cut the crop short or found
+        # nothing. Ink and rib shadow differ in colour: this printer's ink
+        # is blue-black (B - (R+G)/2 about +13..+18 on real frames), a
+        # shadow is neutral grey (about +5..+7). 0 disables.
+        blue_min = float(dyn_cfg.get("erase_keep_ink_blueness", 13.0))
+        if blue_min > 0 and search.ndim == 3 and search.shape[2] == 3:
+            f = search.astype(np.float32)
+            blue = cv2.GaussianBlur(f[..., 0] - (f[..., 1] + f[..., 2]) / 2.0, (0, 0), 1.0)
+            wiped = (before_erase > 0) & (dark_mask == 0)
+            dark_mask = dark_mask.copy()
+            dark_mask[wiped & (blue >= blue_min)] = 255
 
     # Small closing to merge dot-matrix fragments belonging to the same
     # character - deliberately much smaller than the blackhat kernel so it
