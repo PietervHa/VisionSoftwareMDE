@@ -108,7 +108,7 @@ ocr:
     #            6 wrong, 4 rejected (PaddleOCR on the same bottles mostly read
     #            the 6 under the rib as 5). ~0.4 s per bottle.
     #   paddle - PaddleOCR with the consensus settings below (previous).
-    reader: paddle               # font = trained dot-font reader (parked: it fills covered/missing digits)
+    reader: font               # font = trained dot-font reader (parked: it fills covered/missing digits)
     font_reader:
       model: ''                   # '' = backend/detection/ocr/models/font_reader.npz
       # To check on the line that it READS rather than recalls known codes:
