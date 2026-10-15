@@ -43,6 +43,17 @@ class FontReaderTests(unittest.TestCase):
         self.assertEqual(r["text"], "4113 08:26 BB 05/26")
         self.assertTrue(r["flipped"])
 
+    def test_timings_and_upright_early_exit(self):
+        r = self._read("4113_rib_through_6.png")
+        self.assertIn("timings_ms", r)
+        self.assertIn("grid_up_ms", r["timings_ms"])
+        self.assertNotIn("grid_down_ms", r["timings_ms"], "clear upright read must skip the upside-down pass")
+
+    def test_upside_down_still_found_with_early_exit(self):
+        r = self._read("4113_upside_down.png")
+        self.assertTrue(r["flipped"])
+        self.assertIn("grid_down_ms", r["timings_ms"])
+
     def test_blank_crop_is_not_trusted(self):
         r = self.reader.read(np.full((144, 254, 3), 180, np.uint8), TPL)
         self.assertTrue(r is None or not r["trusted"])

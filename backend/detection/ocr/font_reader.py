@@ -40,6 +40,7 @@ spaces (e.g. ["#### ##:##", "BB ##/##"]). Other templates -> not supported
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import cv2
@@ -59,11 +60,16 @@ def _rotate(img, angle):
     return cv2.warpAffine(img, m, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
 
 
-def _deskew(ink, max_deg=30.0):
+def _deskew(ink, max_deg=30.0, first_deg=8.0):
+    """Residual skew: the angle with the sharpest row profile. The locator
+    already levelled the crop, so search +/-first_deg first and only widen
+    to +/-max_deg when the best angle lies at the edge of that range."""
     def sharp(a):
         r = _rotate(ink, a).sum(axis=1)
         return float((np.diff(r) ** 2).sum())
-    coarse = max(np.arange(-max_deg, max_deg + 1e-6, 2.0), key=sharp)
+    coarse = max(np.arange(-first_deg, first_deg + 1e-6, 2.0), key=sharp)
+    if abs(coarse) >= first_deg - 1e-6 and max_deg > first_deg:
+        coarse = max(np.arange(-max_deg, max_deg + 1e-6, 2.0), key=sharp)
     return float(max(np.arange(coarse - 2.0, coarse + 2.01, 0.5), key=sharp))
 
 
@@ -135,8 +141,8 @@ def ink_maps(crop):
     return boosted, raw
 
 
-def segment(fit_ink, template):
-    ang = _deskew(fit_ink)
+def segment(fit_ink, template, first_deg=8.0):
+    ang = _deskew(fit_ink, first_deg=first_deg)
     f = _rotate(fit_ink, ang)
     _, bands = _fit_lines(f)
     lines = [_fit_cells(f, band, tl)[1] for band, tl in zip(bands, template)]
@@ -162,7 +168,8 @@ def cells_from(boosted, seg, flip):
 # -- classifier -----------------------------------------------------------------
 
 class FontReader:
-    def __init__(self, model_path=None, min_literal_score=-1.0, min_digit_confidence=0.0):
+    def __init__(self, model_path=None, min_literal_score=-1.0, min_digit_confidence=0.0,
+                 early_exit_literal=-0.25):
         data = np.load(str(model_path or DEFAULT_MODEL), allow_pickle=False)
         self.W1, self.b1, self.W2, self.b2 = (data[k].astype(np.float32) for k in ("W1", "b1", "W2", "b2"))
         self.classes = [str(c) for c in data["classes"]]
@@ -170,6 +177,10 @@ class FontReader:
         self.digits = [self.idx[str(d)] for d in range(10)]
         self.min_literal_score = float(min_literal_score)
         self.min_digit_confidence = float(min_digit_confidence)
+        # Skip the upside-down pass when the upright read's B, : and / are
+        # already clearly right (a wrong orientation scores far lower: -3 to
+        # -11 on real frames). None = always try both orientations.
+        self.early_exit_literal = early_exit_literal
 
     def supports(self, template) -> bool:
         return all(ch == "#" or ch == " " or ch in self.idx for line in template for ch in line)
@@ -200,21 +211,39 @@ class FontReader:
         """Returns dict(lines, text, literal_score, confidence, flipped, angle, trusted) or None."""
         if crop is None or crop.size == 0 or not self.supports(template) or len(template) != 2:
             return None
+        t0 = time.perf_counter()
+        timings = {}
         boosted, raw = ink_maps(crop)
+        timings["ink_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         n_pos = sum(1 for line in template for ch in line if ch != " ")
         best = None
         for flip in (False, True):
+            if (flip and best is not None and self.early_exit_literal is not None
+                    and best["literal_score"] >= self.early_exit_literal):
+                break                                   # upright read is clearly right
+            ts = time.perf_counter()
             fit = raw[::-1, ::-1].copy() if flip else raw
-            seg = segment(fit, template)
-            cells = cells_from(boosted, seg, flip)
-            if len(cells) != n_pos:
-                continue
-            lines, lit, conf = self._decode(self._predict(cells), template)
-            if best is None or lit > best["literal_score"]:
-                best = {"lines": lines, "literal_score": round(lit, 3), "confidence": round(conf, 3),
-                        "flipped": flip, "angle": seg["angle"]}
+            # Fast path: narrow angle search. If that read isn't clearly right,
+            # redo it with the full +/-30 degree search (a wrong angle inside
+            # the narrow range can otherwise win on a skewed crop).
+            for first_deg in (8.0, 30.0):
+                seg = segment(fit, template, first_deg=first_deg)
+                cells = cells_from(boosted, seg, flip)
+                if len(cells) != n_pos:
+                    continue
+                tp = time.perf_counter()
+                lines, lit, conf = self._decode(self._predict(cells), template)
+                timings["predict_ms"] = round(timings.get("predict_ms", 0.0) + (time.perf_counter() - tp) * 1000, 2)
+                if best is None or lit > best["literal_score"]:
+                    best = {"lines": lines, "literal_score": round(lit, 3), "confidence": round(conf, 3),
+                            "flipped": flip, "angle": seg["angle"]}
+                if self.early_exit_literal is None or lit >= self.early_exit_literal:
+                    break
+            timings["grid_down_ms" if flip else "grid_up_ms"] = round((time.perf_counter() - ts) * 1000, 1)
+        timings["total_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         if best is None:
             return None
+        best["timings_ms"] = timings
         best["text"] = " ".join(best["lines"])
         best["trusted"] = (best["literal_score"] >= self.min_literal_score
                            and best["confidence"] >= self.min_digit_confidence)

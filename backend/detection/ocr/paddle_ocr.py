@@ -958,6 +958,7 @@ class PaddleOCR:
                         "text": r["text"] if accepted else None, "raw_text": text,
                         "min_token_confidence": r["confidence"] if r else None,
                         "literal_score": r["literal_score"] if r else None,
+                        "timings_ms": r.get("timings_ms") if r else None,
                         "orientation": ("reversed" if r and r["flipped"] else "normal") if r else None}
         if cycle_debug_dir:
             try:
