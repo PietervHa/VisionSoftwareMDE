@@ -89,7 +89,7 @@ ocr:
   #   model_dir: models/ocread_rec
   # The OCR pipeline keeps the general model either way.
   ocread_recognition:
-    model_dir: ''
+    model_dir: 'models/ocread_rec_model'
     model_name: PP-OCRv5_mobile_rec   # architecture the model was fine-tuned from
 
   # PaddleOCR only: characters OCR output may contain. Tokens with none of
